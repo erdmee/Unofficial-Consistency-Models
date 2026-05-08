@@ -1,0 +1,41 @@
+# CIFAR-10 Consistency Training (CT) — placeholder config.
+# Defaults track Song et al. 2023, Table 3 (CIFAR-10 CT). Adjust during tuning.
+
+data:
+  name: cifar10
+  image_size: 32
+  channels: 3
+  data_dir: ./data
+
+schedule:
+  sigma_min: 0.002
+  sigma_max: 80.0
+  sigma_data: 0.5
+  rho: 7.0
+  s0: 2        # N(0)  — initial discretization count
+  s1: 150      # N(K)  — final discretization count
+
+model:
+  base_channels: 128
+  channel_mult: [1, 2, 2, 2]
+  num_res_blocks: 4
+  attention_resolutions: [16, 8]
+  num_heads: 4
+  dropout: 0.3
+
+training:
+  loss: lpips                # l2 | pseudo_huber | lpips
+  pseudo_huber_c: 0.00054    # only used if loss == pseudo_huber
+  batch_size: 512
+  total_steps: 800000
+  lr: 0.0002
+  optim: radam
+  weight_decay: 0.0
+  ema_mu0: 0.95              # μ_0 used by μ(k) schedule
+  grad_clip: 0.0
+
+logging:
+  log_every: 100
+  ckpt_every: 5000
+  sample_every: 5000
+  out_dir: runs/cifar10_ct

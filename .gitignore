@@ -1,0 +1,64 @@
+# Byte-compiled / cached
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Test / type-checker caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ML / training artifacts
+runs/
+outputs/
+checkpoints/
+wandb/
+mlruns/
+lightning_logs/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+
+# Datasets (kept out of git; download with scripts in datasets/)
+# Anchored with leading slash so cm/data/ source code is NOT ignored.
+/data/
+/datasets/raw/
+/datasets/processed/
+*.tar
+*.tar.gz
+*.zip
+
+# Logs
+*.log
+
+# Local secrets / config overrides
+.env
+.env.local
+configs/local_*.yaml
