@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from layers import (
+from cm.models.layers import (
     zero_module,
     get_timestep_embedding,
     TimestepEmbedSequential,
@@ -17,24 +17,30 @@ class UNetModel(nn.Module):
     """
     def __init__(
         self,
+        image_size: int = 64,
         in_channels: int = 3,
-        model_channels: int = 128,
+        model_channels: int = 192,
         out_channels: int = 3,
-        num_res_blocks: int = 2,
-        attention_resolutions: tuple = (2, 4), # Downsample factors to apply attention
-        dropout: float = 0.0,
-        channel_mult: tuple = (1, 2, 2, 2),
+        num_res_blocks: int = 3,
+        attention_resolutions: tuple = (32, 16, 8), # Downsample factors to apply attention
+        dropout: float = 0.1,
+        channel_mult: tuple = (1, 2, 3, 4),
         num_heads: int = 4,
         num_head_channels: int = -1,
-        num_classes: int = None, # Added parameter for class conditioning
+        num_classes: int = 1000, # Added parameter for class conditioning
+        use_scale_shift_norm: bool = True, # following EDM's use of scale-shift in ResBlocks
+        resblock_updown: bool = True, # Whether to use ResBlocks in up/downsample layers (EDM uses True)
     ):
         super().__init__()
 
+        self.image_size = image_size
         self.in_channels = in_channels
         self.model_channels = model_channels
         self.out_channels = out_channels
         self.num_res_blocks = num_res_blocks
         self.num_classes = num_classes
+        self.use_scale_shift_norm = use_scale_shift_norm
+        self.resblock_updown = resblock_updown
 
         # 1. Initialize Time Embedding layer
         time_embed_dim = model_channels * 4
@@ -70,12 +76,13 @@ class UNetModel(nn.Module):
                         emb_channels=time_embed_dim,
                         dropout=dropout,
                         out_channels=mult * model_channels,
+                        use_scale_shift_norm=self.use_scale_shift_norm,
                     )
                 ]
                 ch = mult * model_channels
                 
                 # Apply attention if the current resolution matches specified factors
-                if ds in attention_resolutions:
+                if (self.image_size // ds) in attention_resolutions:
                     layers.append(
                         AttentionBlock(
                             channels=ch,
@@ -89,19 +96,34 @@ class UNetModel(nn.Module):
             
             # Apply Downsample if it's not the last level
             if level != len(channel_mult) - 1:
-                self.input_blocks.append(
-                    TimestepEmbedSequential(
-                        Downsample(channels=ch, use_conv=True, out_channels=ch)
+                # downsample with ResBlock if resblock_updown is True, otherwise use simple Downsample
+                if self.resblock_updown:
+                    self.input_blocks.append(
+                        TimestepEmbedSequential(
+                            ResBlock(
+                                channels=ch, 
+                                emb_channels=time_embed_dim, 
+                                dropout=dropout, 
+                                out_channels=ch, 
+                                use_scale_shift_norm=self.use_scale_shift_norm, 
+                                down=True # This will perform downsampling inside the ResBlock
+                            )
+                        )
                     )
-                )
+                else:
+                    self.input_blocks.append(
+                        TimestepEmbedSequential(
+                            Downsample(channels=ch, use_conv=True, out_channels=ch)
+                        )
+                    )
                 input_block_chans.append(ch)
                 ds *= 2
 
         # 5. Middle Blocks (Bottleneck)
         self.middle_block = TimestepEmbedSequential(
-            ResBlock(ch, time_embed_dim, dropout),
+            ResBlock(ch, time_embed_dim, dropout, use_scale_shift_norm=self.use_scale_shift_norm),
             AttentionBlock(ch, num_heads=num_heads, num_head_channels=num_head_channels),
-            ResBlock(ch, time_embed_dim, dropout),
+            ResBlock(ch, time_embed_dim, dropout, use_scale_shift_norm=self.use_scale_shift_norm),
         )
 
         # 6. Upsampling Blocks (Decoder)
@@ -116,11 +138,12 @@ class UNetModel(nn.Module):
                         emb_channels=time_embed_dim,
                         dropout=dropout,
                         out_channels=model_channels * mult,
+                        use_scale_shift_norm=self.use_scale_shift_norm,
                     )
                 ]
                 ch = model_channels * mult
                 
-                if ds in attention_resolutions:
+                if (self.image_size // ds) in attention_resolutions:
                     layers.append(
                         AttentionBlock(
                             channels=ch,
@@ -131,7 +154,20 @@ class UNetModel(nn.Module):
                 
                 # Apply Upsample if it's the last block of the level (and not the top level)
                 if level and i == num_res_blocks:
-                    layers.append(Upsample(channels=ch, use_conv=True, out_channels=ch))
+                    # upsample with ResBlock if resblock_updown is True, otherwise use simple Upsample
+                    if self.resblock_updown:
+                        layers.append(
+                            ResBlock(
+                                channels=ch, 
+                                emb_channels=time_embed_dim, 
+                                dropout=dropout, 
+                                out_channels=ch, 
+                                use_scale_shift_norm=self.use_scale_shift_norm, 
+                                up=True # This will perform upsampling inside the ResBlock
+                            )
+                        )
+                    else:
+                        layers.append(Upsample(channels=ch, use_conv=True, out_channels=ch))
                     ds //= 2
                     
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
@@ -159,7 +195,8 @@ class UNetModel(nn.Module):
 
         # 2. Add Class Embedding if applicable
         if self.num_classes is not None:
-            assert y is not None, "Class labels 'y' must be provided when num_classes is set."
+            if y is None:
+                y = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
             emb = emb + self.label_emb(y)
 
         hs = []

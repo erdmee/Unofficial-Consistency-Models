@@ -187,6 +187,9 @@ class ResBlock(TimestepBlock):
         emb_channels: int,
         dropout: float = 0.0,
         out_channels: int = None,
+        use_scale_shift_norm=False,
+        up=False,   # upsampling mode
+        down=False, # downsampling mode
     ):
         """
         Args:
@@ -194,11 +197,27 @@ class ResBlock(TimestepBlock):
             emb_channels (int): Dimension of the timestep embedding.
             dropout (float): Dropout probability.
             out_channels (Optional[int]): Number of output channels. Defaults to `channels`.
+            use_scale_shift_norm (bool): If True, uses scale and shift in the normalization 
+                                         layer following EDM's design. If False, uses standard GroupNorm.
+            up (bool): If True, this block performs upsampling.
+            down (bool): If True, this block performs downsampling.
         """
         super().__init__()
         self.channels = channels
         self.emb_channels = emb_channels
         self.out_channels = out_channels or channels
+        self.use_scale_shift_norm = use_scale_shift_norm
+
+        self.up = up
+        self.down = down
+
+        # Resolution adjustment layer (Upsample, Downsample, or Identity)
+        if self.up:
+            self.resizer = Upsample(channels=channels, use_conv=False)
+        elif self.down:
+            self.resizer = Downsample(channels=channels, use_conv=False)
+        else:
+            self.resizer = nn.Identity()
 
         # 1. First convolutional block(GroupNorm -> SiLU -> Conv)
         self.in_layers = nn.Sequential(
@@ -208,9 +227,10 @@ class ResBlock(TimestepBlock):
         )
 
         # 2. Time embedding projection
+        emb_out_channels = self.out_channels * 2 if use_scale_shift_norm else self.out_channels
         self.emb_layers = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(emb_channels, self.out_channels)
+            nn.Linear(emb_channels, emb_out_channels)
         )
 
         # 3. Output convolutional block (with dropout and zero-initialized weights)
@@ -237,19 +257,33 @@ class ResBlock(TimestepBlock):
         Returns:
             torch.Tensor: Output tensor of shape (B, out_channels, H, W).
         """
-        h = self.in_layers(x)
+        # 1. Calculate x_skip (including resolution adjustment)
+        x_skip = self.resizer(x)
 
-        emb_out = self.emb_layers(emb)
-        
-        # embedding dimension: (B, C) -> (B, C, 1, 1)
+        # 2. h = GroupNorm -> SiLU -> Conv
+        if self.up or self.down:
+            in_rest, in_conv = self.in_layers[:-1], self.in_layers[-1]
+            h = in_rest(x)
+            h = self.resizer(h)
+            h = in_conv(h)
+        else:
+            h = self.in_layers(x)
+
+        # 3. scale-shift normalization 
+        emb_out = self.emb_layers(emb).type(h.dtype)
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
             
-        h = h + emb_out
+        if self.use_scale_shift_norm:
+            out_norm, out_rest = self.out_layers[0], self.out_layers[1:]
+            scale, shift = torch.chunk(emb_out, 2, dim=1)
+            h = out_norm(h) * (1 + scale) + shift
+            h = out_rest(h)
+        else:
+            h = h + emb_out
+            h = self.out_layers(h)
 
-        h = self.out_layers(h)
-
-        return self.skip_connection(x) + h
+        return self.skip_connection(x_skip) + h
 
 
 class AttentionBlock(TimestepBlock):
