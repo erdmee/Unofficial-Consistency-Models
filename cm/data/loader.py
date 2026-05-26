@@ -5,8 +5,8 @@ from typing import Generator, Tuple, Dict
 import torch
 
 # Import from our new decoupled modules
-from transforms import build_transforms
-from dataset import ImageDataset
+from cm.data.transforms import build_transforms
+from cm.data.dataset import ImageDataset
 
 def _list_image_files_recursively(data_dir: str):
     """Recursively lists all standard image files within a directory."""

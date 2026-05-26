@@ -18,7 +18,7 @@ class CDTrainer:
         target_model: torch.nn.Module,
         teacher_model: torch.nn.Module,
         data_dir: str,
-        resume_ckpt: str = None,
+        resume_ckpt: str | None = None,
         batch_size: int = 64,
         image_size: int = 32,
         lr: float = 1e-4,

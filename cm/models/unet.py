@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from layers import (
+from cm.models.layers import (
     zero_module,
     get_timestep_embedding,
     TimestepEmbedSequential,
@@ -26,7 +26,7 @@ class UNetModel(nn.Module):
         channel_mult: tuple = (1, 2, 2, 2),
         num_heads: int = 4,
         num_head_channels: int = -1,
-        num_classes: int = None, # Added parameter for class conditioning
+        num_classes: int | None = None, # Added parameter for class conditioning
     ):
         super().__init__()
 

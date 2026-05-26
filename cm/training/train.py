@@ -12,7 +12,7 @@ def main():
     # 1. Build Models 
     # =================================================================
     def create_model():
-        unet = UNetModel(image_size=image_size, in_channels=3, model_channels=128, out_channels=3)
+        unet = UNetModel(in_channels=3, model_channels=128, out_channels=3)
         return ConsistencyPrecond(unet).to(device)
 
     online_model = create_model()

@@ -1,7 +1,6 @@
 import math
 import torch
 
-
 def karras_sigmas(
     N: int,
     sigma_min: float = 0.002,
@@ -63,10 +62,10 @@ def mu_schedule(
     Keeps the effective EMA averaging window roughly constant as
     N(k) grows: μ(k) = exp(s0 * log(μ0) / N(k)). When k = 0, N(k) = s0 and μ(k) = μ0 by construction.
     """
-    # 1. Re-derive the pre-offset bucket count
-    n_k = n_schedule(k, total_steps, s0, s1) - 1
+    # 1. Paper's N(k) — n_schedule already returns this (CM Eq. 11).
+    n_k = n_schedule(k, total_steps, s0, s1)
 
-    # 2. Solve c such that μ(0) == mu0 when n_k == s0
+    # 2. Solve c such that μ(0) == mu0 when N(0) == s0
     c = -math.log(mu0) * s0
 
     # 3. Exponentially decay as buckets grow

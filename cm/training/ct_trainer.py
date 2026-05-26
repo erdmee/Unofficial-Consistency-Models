@@ -19,7 +19,7 @@ class CTTrainer:
         online_model: torch.nn.Module,
         target_model: torch.nn.Module,
         data_dir: str,
-        resume_ckpt: str = None,
+        resume_ckpt: str | None = None,
         batch_size: int = 512,
         image_size: int = 32,
         lr: float = 2e-4,

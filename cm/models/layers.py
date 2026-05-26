@@ -186,7 +186,7 @@ class ResBlock(TimestepBlock):
         channels: int,
         emb_channels: int,
         dropout: float = 0.0,
-        out_channels: int = None,
+        out_channels: int | None = None,
     ):
         """
         Args:
