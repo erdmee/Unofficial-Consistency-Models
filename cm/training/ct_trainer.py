@@ -9,21 +9,26 @@ from piq import LPIPS
 from cm.data.loader import create_data_loader
 from cm.utils.checkpoint import save_checkpoint, load_checkpoint
 from cm.training.ema import update_ema
-from cm.training.losses import consistency_distillation_loss
+from cm.training.losses import consistency_training_loss
+from cm.diffusion.karras_schedule import n_schedule, mu_schedule
 
-class CDTrainer:
+
+class CTTrainer:
     def __init__(
         self,
         online_model: torch.nn.Module,
         target_model: torch.nn.Module,
-        teacher_model: torch.nn.Module,
         data_dir: str,
         resume_ckpt: str | None = None,
-        batch_size: int = 64,
+        batch_size: int = 512,
         image_size: int = 32,
-        lr: float = 1e-4,
-        max_steps: int = 100000,
+        lr: float = 2e-4,
+        max_steps: int = 800_000,
         save_interval: int = 5000,
+        # CT-specific schedule knobs (Song et al. 2023, Section 5)
+        s0: int = 2,
+        s1: int = 150,
+        mu0: float = 0.95,
         use_lpips: bool = True,
     ):
         self.batch_size = batch_size
@@ -31,19 +36,31 @@ class CDTrainer:
         self.max_steps = max_steps
         self.save_interval = save_interval
         self.use_lpips = use_lpips
+        self.s0 = s0
+        self.s1 = s1
+        self.mu0 = mu0
 
         self._setup_ddp()
 
-        # 1. Save the injected models and map to DDP if distributed
+        # 1. Models — target starts frozen, will be EMA-updated each step
         self.online_model = online_model
         self.target_model = target_model
-        self.teacher_model = teacher_model
+        self.target_model.requires_grad_(False)
+        self.target_model.eval()
 
         if self.is_distributed:
-            self.online_model = DDP(self.online_model, device_ids=[self.local_rank], output_device=self.local_rank)
+            self.online_model = DDP(
+                self.online_model,
+                device_ids=[self.local_rank],
+                output_device=self.local_rank,
+            )
 
-        # 2. Optimizer & Data Loader setup
-        online_params = self.online_model.module.parameters() if self.is_distributed else self.online_model.parameters()
+        # 2. Optimizer + AMP scaler
+        online_params = (
+            self.online_model.module.parameters()
+            if self.is_distributed
+            else self.online_model.parameters()
+        )
         self.optimizer = AdamW(online_params, lr=lr)
         self.scaler = GradScaler(self.device.type)
 
@@ -51,19 +68,20 @@ class CDTrainer:
         if resume_ckpt and os.path.exists(resume_ckpt):
             self._resume_training(resume_ckpt)
 
+        # 3. Infinite data generator
         self.data_generator = create_data_loader(
             data_dir=data_dir,
             batch_size=self.batch_size,
-            image_size=self.image_size
+            image_size=self.image_size,
         )
 
+        # 4. LPIPS distance metric (paper's default d(·,·) on CIFAR-10)
         if self.use_lpips:
             self.lpips_fn = LPIPS(replace_pooling=True, reduction="none").to(self.device)
         else:
             self.lpips_fn = None
 
     def _setup_ddp(self):
-        # ddp setup logic (same as before, but now in a separate method for clarity)
         self.is_distributed = "WORLD_SIZE" in os.environ
         if self.is_distributed:
             dist.init_process_group(backend="nccl")
@@ -83,41 +101,51 @@ class CDTrainer:
             ema_model=self.target_model,
             model=self.online_model.module if self.is_distributed else self.online_model,
             optimizer=self.optimizer,
-            device=str(self.device)
+            device=str(self.device),
         )
 
     def train(self):
         if self.is_main_process:
-            print("[*] Starting Consistency Distillation...")
+            print("[*] Starting Consistency Training (no teacher)...")
 
         for step in range(self.start_step, self.max_steps):
             self.online_model.train()
             self.optimizer.zero_grad()
 
+            # 1. Step-dependent schedules — the heart of CT
+            N_k  = n_schedule(step, self.max_steps, self.s0, self.s1)
+            mu_k = mu_schedule(step, self.max_steps, self.mu0, self.s0, self.s1)
+
+            # 2. Fetch a batch
             images, _ = next(self.data_generator)
             images = images.to(self.device)
 
+            # 3. CT loss under AMP
             with torch.autocast(device_type=self.device.type, dtype=torch.float16):
-                loss = consistency_distillation_loss(
+                loss = consistency_training_loss(
                     online_model=self.online_model,
                     target_model=self.target_model,
-                    teacher_model=self.teacher_model,
                     images=images,
-                    num_scales=18,
+                    num_scales=N_k,
                     use_lpips=self.use_lpips,
-                    lpips_loss_fn=self.lpips_fn
+                    lpips_loss_fn=self.lpips_fn,
                 )
 
-            # AMP backward and optimizer step
+            # 4. Backward + optimizer step
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            update_ema(self.target_model, self.online_model, mu=0.999)
+            # 5. EMA target update with this step's μ(k)
+            update_ema(self.target_model, self.online_model, mu=mu_k)
 
-            # Logging & Saving
+            # 6. Logging & checkpointing
             if self.is_main_process and step % 100 == 0:
-                print(f"Step {step}/{self.max_steps} | CD Loss: {loss.item():.4f}")
+                print(
+                    f"Step {step}/{self.max_steps} | "
+                    f"N(k)={N_k} | μ(k)={mu_k:.5f} | "
+                    f"CT Loss: {loss.item():.4f}"
+                )
 
             if self.is_main_process and step > 0 and step % self.save_interval == 0:
                 save_checkpoint(
@@ -125,7 +153,7 @@ class CDTrainer:
                     step=step,
                     ema_model=self.target_model,
                     model=self.online_model.module if self.is_distributed else self.online_model,
-                    optimizer=self.optimizer
+                    optimizer=self.optimizer,
                 )
 
         if self.is_distributed:

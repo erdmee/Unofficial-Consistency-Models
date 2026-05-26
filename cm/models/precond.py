@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from unet import UNetModel
+from cm.models.unet import UNetModel
 
 class ConsistencyPrecond(nn.Module):
     """

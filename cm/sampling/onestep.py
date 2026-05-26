@@ -64,10 +64,9 @@ def main():
     # 1. Initialize the Model Architecture
     # ==============================================================================
     unet = UNetModel(
-        image_size=args.image_size, 
-        in_channels=3, 
-        model_channels=128, 
-        out_channels=3
+        in_channels=3,
+        model_channels=128,
+        out_channels=3,
     )
     # Consistency Models always generate using the EMA (Target) model for best quality
     target_model = ConsistencyPrecond(unet).to(device)

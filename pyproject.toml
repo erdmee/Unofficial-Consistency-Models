@@ -1,0 +1,18 @@
+[project]
+name = "consistency-models"
+version = "0.0.0"
+description = "Unofficial PyTorch implementation of Consistency Models (local dev env)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "pillow>=10.0",
+    "tqdm>=4.65",
+    "pyyaml>=6.0",
+    "piq>=0.8.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
