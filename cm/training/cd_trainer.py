@@ -4,6 +4,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.amp import autocast, GradScaler
 from torch.optim import AdamW
+from piq import LPIPS
 
 from cm.data.loader import create_data_loader
 from cm.utils.checkpoint import save_checkpoint, load_checkpoint
@@ -32,7 +33,7 @@ class CDTrainer:
         self.use_lpips = use_lpips
 
         self._setup_ddp()
-        
+
         # 1. Save the injected models and map to DDP if distributed
         self.online_model = online_model
         self.target_model = target_model
@@ -45,14 +46,14 @@ class CDTrainer:
         online_params = self.online_model.module.parameters() if self.is_distributed else self.online_model.parameters()
         self.optimizer = AdamW(online_params, lr=lr)
         self.scaler = GradScaler(self.device.type)
-        
+
         self.start_step = 0
         if resume_ckpt and os.path.exists(resume_ckpt):
             self._resume_training(resume_ckpt)
 
         self.data_generator = create_data_loader(
-            data_dir=data_dir, 
-            batch_size=self.batch_size, 
+            data_dir=data_dir,
+            batch_size=self.batch_size,
             image_size=self.image_size
         )
 
@@ -102,7 +103,7 @@ class CDTrainer:
                     target_model=self.target_model,
                     teacher_model=self.teacher_model,
                     images=images,
-                    num_scales=18,  
+                    num_scales=18,
                     use_lpips=self.use_lpips,
                     lpips_loss_fn=self.lpips_fn
                 )
