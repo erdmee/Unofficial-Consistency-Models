@@ -40,6 +40,7 @@ def main():
 
     unet = UNetModel(in_channels=3, model_channels=128, out_channels=3)
     target_model = ConsistencyPrecond(unet).to(device)
+    sampling_ema_model = ConsistencyPrecond(UNetModel(in_channels=3, model_channels=128, out_channels=3)).to(device)
 
     print(f"[*] Loading checkpoint from {args.ckpt}...")
     step, _ = load_checkpoint(
@@ -47,13 +48,14 @@ def main():
         ema_model=target_model,
         model=None,
         optimizer=None,
+        sampling_ema_model=sampling_ema_model,
         device=str(device),
     )
-    print(f"[*] Successfully loaded EMA model from step {step}.")
+    print(f"[*] Successfully loaded sampling EMA model from step {step}.")
 
     print("[*] Performing 1-step generation...")
     generated_images = generate_one_step(
-        model=target_model,
+        model=sampling_ema_model,
         batch_size=args.batch_size,
         image_size=args.image_size,
         device=device,

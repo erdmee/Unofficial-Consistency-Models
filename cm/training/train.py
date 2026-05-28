@@ -64,19 +64,25 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
     teacher = build_edm(cfg, device)
     online = build_consistency(cfg, device)
     target = build_consistency(cfg, device)
+    sampling_ema = build_consistency(cfg, device)
 
     print(f"[train] loading teacher state_dict from {teacher_ckpt}")
     load_inner_unet(teacher, teacher_ckpt, device)
     load_inner_unet(online, teacher_ckpt, device)
-    load_inner_unet(target, teacher_ckpt, device)
+
+    # target and sampling EMA start exactly equal to online — paper Sec. 4 / Appx. C.
+    target.load_state_dict(online.state_dict())
+    sampling_ema.load_state_dict(online.state_dict())
 
     teacher.requires_grad_(False).eval()
     target.requires_grad_(False).eval()
+    sampling_ema.requires_grad_(False).eval()
 
     trainer = CDTrainer(
         online_model=online,
         target_model=target,
         teacher_model=teacher,
+        sampling_ema_model=sampling_ema,
         data_dir=cfg["data"]["data_dir"],
         resume_ckpt=resume,
         batch_size=cfg["training"]["batch_size"],
@@ -88,6 +94,8 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
         num_scales=cd_cfg["num_scales"],
         target_mu=cd_cfg["target_mu"],
         log_every=cfg["logging"]["log_every"],
+        use_fp16=cfg["training"].get("use_fp16", False),
+        sampling_ema_decay=cfg["training"].get("sampling_ema_decay", 0.9999),
     )
     trainer.train()
 
@@ -98,6 +106,7 @@ def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
 
     online = build_consistency(cfg, device)
     target = build_consistency(cfg, device)
+    sampling_ema = build_consistency(cfg, device)
 
     pretrained = ct_cfg.get("pretrained_ckpt")
     if pretrained:
@@ -105,15 +114,20 @@ def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
         if pretrained_path.is_file():
             print(f"[train] EDM init from {pretrained}")
             load_inner_unet(online, pretrained, device)
-            load_inner_unet(target, pretrained, device)
         else:
             print(f"[train] WARNING: pretrained_ckpt={pretrained} not found, falling back to random init")
     else:
         print("[train] random init (no pretrained_ckpt in config)")
 
+    # target and sampling EMA must start exactly equal to online, whether or
+    # not we loaded a pretrained UNet — random init otherwise diverges from t=0.
+    target.load_state_dict(online.state_dict())
+    sampling_ema.load_state_dict(online.state_dict())
+
     trainer = CTTrainer(
         online_model=online,
         target_model=target,
+        sampling_ema_model=sampling_ema,
         data_dir=cfg["data"]["data_dir"],
         resume_ckpt=resume,
         batch_size=cfg["training"]["batch_size"],
@@ -126,6 +140,8 @@ def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
         mu0=ct_cfg["mu0"],
         use_lpips=(cfg["training"]["loss"] == "lpips"),
         log_every=cfg["logging"]["log_every"],
+        use_fp16=cfg["training"].get("use_fp16", False),
+        sampling_ema_decay=cfg["training"].get("sampling_ema_decay", 0.9999),
     )
     trainer.train()
 

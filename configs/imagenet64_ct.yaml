@@ -17,6 +17,8 @@ training:
   batch_size: 64
   lr: 0.0001
   max_steps: 100000
+  use_fp16: true
+  sampling_ema_decay: 0.999943
 
 ct:
   s0: 2

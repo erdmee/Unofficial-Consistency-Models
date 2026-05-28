@@ -17,6 +17,8 @@ training:
   batch_size: 256
   lr: 0.0004
   max_steps: 100000
+  use_fp16: false
+  sampling_ema_decay: 0.9999
 
 cd:
   teacher_ckpt: pretrained/edm_cifar10_teacher.pt

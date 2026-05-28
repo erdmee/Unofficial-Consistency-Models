@@ -4,7 +4,7 @@ import torch
 import torch.distributed as dist
 from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import AdamW
+from torch.optim import RAdam
 from piq import LPIPS
 
 from cm.data.loader import create_data_loader
@@ -19,6 +19,7 @@ class CDTrainer:
         online_model: torch.nn.Module,
         target_model: torch.nn.Module,
         teacher_model: torch.nn.Module,
+        sampling_ema_model: torch.nn.Module,
         data_dir: str,
         resume_ckpt: str | None = None,
         batch_size: int = 64,
@@ -30,6 +31,8 @@ class CDTrainer:
         num_scales: int = 18,
         target_mu: float = 0.95,
         log_every: int = 50,
+        use_fp16: bool = False,
+        sampling_ema_decay: float = 0.9999,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
@@ -39,19 +42,24 @@ class CDTrainer:
         self.num_scales = num_scales
         self.target_mu = target_mu
         self.log_every = log_every
+        self.use_fp16 = use_fp16
+        self.sampling_ema_decay = sampling_ema_decay
 
         self._setup_ddp()
 
         self.online_model = online_model
         self.target_model = target_model
         self.teacher_model = teacher_model
+        self.sampling_ema_model = sampling_ema_model
+        self.sampling_ema_model.requires_grad_(False)
+        self.sampling_ema_model.eval()
 
         if self.is_distributed:
             self.online_model = DDP(self.online_model, device_ids=[self.local_rank], output_device=self.local_rank)
 
         online_params = self.online_model.module.parameters() if self.is_distributed else self.online_model.parameters()
-        self.optimizer = AdamW(online_params, lr=lr)
-        self.scaler = GradScaler(self.device.type)
+        self.optimizer = RAdam(online_params, lr=lr, weight_decay=0.0)
+        self.scaler = GradScaler(self.device.type, enabled=self.use_fp16)
 
         self.start_step = 0
         if resume_ckpt and os.path.exists(resume_ckpt):
@@ -88,6 +96,7 @@ class CDTrainer:
             ema_model=self.target_model,
             model=self.online_model.module if self.is_distributed else self.online_model,
             optimizer=self.optimizer,
+            sampling_ema_model=self.sampling_ema_model,
             device=str(self.device),
         )
 
@@ -102,7 +111,7 @@ class CDTrainer:
             images, _ = next(self.data_generator)
             images = images.to(self.device)
 
-            with torch.autocast(device_type=self.device.type, dtype=torch.float16):
+            with torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.use_fp16):
                 loss = consistency_distillation_loss(
                     online_model=self.online_model,
                     target_model=self.target_model,
@@ -118,6 +127,7 @@ class CDTrainer:
             self.scaler.update()
 
             update_ema(self.target_model, self.online_model, mu=self.target_mu)
+            update_ema(self.sampling_ema_model, self.online_model, mu=self.sampling_ema_decay)
 
             if self.is_main_process and step % self.log_every == 0:
                 print(f"Step {step}/{self.max_steps} | CD Loss: {loss.item():.4f}")
@@ -129,6 +139,7 @@ class CDTrainer:
                     ema_model=self.target_model,
                     model=self.online_model.module if self.is_distributed else self.online_model,
                     optimizer=self.optimizer,
+                    sampling_ema_model=self.sampling_ema_model,
                 )
 
         if self.is_distributed:

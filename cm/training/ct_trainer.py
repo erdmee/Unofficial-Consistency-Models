@@ -4,7 +4,7 @@ import torch
 import torch.distributed as dist
 from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import AdamW
+from torch.optim import RAdam
 from piq import LPIPS
 
 from cm.data.loader import create_data_loader
@@ -19,6 +19,7 @@ class CTTrainer:
         self,
         online_model: torch.nn.Module,
         target_model: torch.nn.Module,
+        sampling_ema_model: torch.nn.Module,
         data_dir: str,
         resume_ckpt: str | None = None,
         batch_size: int = 512,
@@ -31,6 +32,8 @@ class CTTrainer:
         mu0: float = 0.95,
         use_lpips: bool = True,
         log_every: int = 50,
+        use_fp16: bool = False,
+        sampling_ema_decay: float = 0.9999,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
@@ -41,6 +44,8 @@ class CTTrainer:
         self.s1 = s1
         self.mu0 = mu0
         self.log_every = log_every
+        self.use_fp16 = use_fp16
+        self.sampling_ema_decay = sampling_ema_decay
 
         self._setup_ddp()
 
@@ -48,6 +53,9 @@ class CTTrainer:
         self.target_model = target_model
         self.target_model.requires_grad_(False)
         self.target_model.eval()
+        self.sampling_ema_model = sampling_ema_model
+        self.sampling_ema_model.requires_grad_(False)
+        self.sampling_ema_model.eval()
 
         if self.is_distributed:
             self.online_model = DDP(
@@ -61,8 +69,8 @@ class CTTrainer:
             if self.is_distributed
             else self.online_model.parameters()
         )
-        self.optimizer = AdamW(online_params, lr=lr)
-        self.scaler = GradScaler(self.device.type)
+        self.optimizer = RAdam(online_params, lr=lr, weight_decay=0.0)
+        self.scaler = GradScaler(self.device.type, enabled=self.use_fp16)
 
         self.start_step = 0
         if resume_ckpt and os.path.exists(resume_ckpt):
@@ -99,6 +107,7 @@ class CTTrainer:
             ema_model=self.target_model,
             model=self.online_model.module if self.is_distributed else self.online_model,
             optimizer=self.optimizer,
+            sampling_ema_model=self.sampling_ema_model,
             device=str(self.device),
         )
 
@@ -116,7 +125,7 @@ class CTTrainer:
             images, _ = next(self.data_generator)
             images = images.to(self.device)
 
-            with torch.autocast(device_type=self.device.type, dtype=torch.float16):
+            with torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.use_fp16):
                 loss = consistency_training_loss(
                     online_model=self.online_model,
                     target_model=self.target_model,
@@ -131,6 +140,7 @@ class CTTrainer:
             self.scaler.update()
 
             update_ema(self.target_model, self.online_model, mu=mu_k)
+            update_ema(self.sampling_ema_model, self.online_model, mu=self.sampling_ema_decay)
 
             if self.is_main_process and step % self.log_every == 0:
                 print(
@@ -146,6 +156,7 @@ class CTTrainer:
                     ema_model=self.target_model,
                     model=self.online_model.module if self.is_distributed else self.online_model,
                     optimizer=self.optimizer,
+                    sampling_ema_model=self.sampling_ema_model,
                 )
 
         if self.is_distributed:

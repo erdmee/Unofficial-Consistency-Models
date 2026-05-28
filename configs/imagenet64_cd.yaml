@@ -17,6 +17,8 @@ training:
   batch_size: 64
   lr: 0.000008
   max_steps: 100000
+  use_fp16: true
+  sampling_ema_decay: 0.999943
 
 cd:
   teacher_ckpt: pretrained/edm_imagenet64_ema.pt
