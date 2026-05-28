@@ -15,10 +15,12 @@ def consistency_distillation_loss(
     sigma_data: float = 0.5,
     use_lpips: bool = False,
     lpips_loss_fn: nn.Module = None,
+    y: torch.Tensor | None = None,
 ):
     """CD loss with a single Heun step from teacher.
 
     Paper indexing: t_n < t_{n+1}; online sees t_{n+1}, target sees t_n.
+    `y` is the per-sample class label tensor for class-conditional models (None for unconditional).
     """
     device = images.device
     batch_size = images.shape[0]
@@ -32,12 +34,12 @@ def consistency_distillation_loss(
     noise = torch.randn_like(images)
     x_t_n_plus_1 = images + noise * t_n_plus_1.view(-1, 1, 1, 1)
 
-    x_t_n = heun_solver(teacher_model, x_t_n_plus_1, t_n_plus_1, t_n).detach()
+    x_t_n = heun_solver(teacher_model, x_t_n_plus_1, t_n_plus_1, t_n, y=y).detach()
 
-    online_pred = online_model(x_t_n_plus_1, t_n_plus_1)
+    online_pred = online_model(x_t_n_plus_1, t_n_plus_1, y)
 
     with torch.no_grad():
-        target_pred = target_model(x_t_n, t_n).detach()
+        target_pred = target_model(x_t_n, t_n, y).detach()
 
     # SNR + data-variance weighting anchored to the high-noise side
     snrs = t_n_plus_1 ** -2
@@ -71,12 +73,14 @@ def consistency_training_loss(
     sigma_data: float = 0.5,
     use_lpips: bool = False,
     lpips_loss_fn: nn.Module = None,
+    y: torch.Tensor | None = None,
 ):
     """CT loss — no teacher.
 
     Pairs (x_{t_n}, x_{t_{n+1}}) share a single noise z, which is the CT trick
     that removes the teacher (Song et al. 2023, Algorithm 3).
     num_scales = N(k) is supplied per training step by the trainer.
+    `y` is the per-sample class label tensor for class-conditional models (None for unconditional).
     """
     device = images.device
     batch_size = images.shape[0]
@@ -91,10 +95,10 @@ def consistency_training_loss(
     x_t_n        = images + z * t_n.view(-1, 1, 1, 1)
     x_t_n_plus_1 = images + z * t_n_plus_1.view(-1, 1, 1, 1)
 
-    online_pred = online_model(x_t_n_plus_1, t_n_plus_1)
+    online_pred = online_model(x_t_n_plus_1, t_n_plus_1, y)
 
     with torch.no_grad():
-        target_pred = target_model(x_t_n, t_n).detach()
+        target_pred = target_model(x_t_n, t_n, y).detach()
 
     snrs = t_n_plus_1 ** -2
     weights = (snrs + (1.0 / sigma_data ** 2)).view(-1, 1, 1, 1)

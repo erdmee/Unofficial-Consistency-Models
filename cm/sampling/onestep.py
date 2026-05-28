@@ -15,14 +15,18 @@ def generate_one_step(
     image_size: int,
     device: torch.device,
     sigma_max: float = 80.0,
+    y: torch.Tensor | None = None,
 ):
-    """1-step generation from a trained Consistency Model. Returns images in [-1, 1]."""
+    """1-step generation from a trained Consistency Model. Returns images in [-1, 1].
+
+    `y` is the per-sample class label tensor for class-conditional models (None for unconditional).
+    """
     model.eval()
 
     shape = (batch_size, 3, image_size, image_size)
     x_T = torch.randn(*shape, device=device) * sigma_max
     t_tensor = torch.full((batch_size,), sigma_max, device=device)
-    x_0 = model(x_T, t_tensor)
+    x_0 = model(x_T, t_tensor, y)
 
     return torch.clamp(x_0, -1.0, 1.0)
 
@@ -33,14 +37,27 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64, help="Number of images to generate")
     parser.add_argument("--image_size", type=int, default=32, help="Image resolution")
     parser.add_argument("--out_path", type=str, default="sample_1step.png", help="Output image path")
+    parser.add_argument(
+        "--class_id",
+        type=int,
+        default=None,
+        help="Class label for class-conditional models. Applied to all samples in the batch. "
+             "Omit for unconditional models.",
+    )
+    parser.add_argument(
+        "--num_classes",
+        type=int,
+        default=None,
+        help="Number of classes the model was trained with (required for class-conditional checkpoints).",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[*] Generating on device: {device}")
 
-    unet = UNetModel(in_channels=3, model_channels=128, out_channels=3)
-    target_model = ConsistencyPrecond(unet).to(device)
-    sampling_ema_model = ConsistencyPrecond(UNetModel(in_channels=3, model_channels=128, out_channels=3)).to(device)
+    unet_kwargs = dict(in_channels=3, model_channels=128, out_channels=3, num_classes=args.num_classes)
+    target_model = ConsistencyPrecond(UNetModel(**unet_kwargs)).to(device)
+    sampling_ema_model = ConsistencyPrecond(UNetModel(**unet_kwargs)).to(device)
 
     print(f"[*] Loading checkpoint from {args.ckpt}...")
     step, _ = load_checkpoint(
@@ -53,6 +70,13 @@ def main():
     )
     print(f"[*] Successfully loaded sampling EMA model from step {step}.")
 
+    y = None
+    if args.class_id is not None:
+        if args.num_classes is None:
+            raise ValueError("--class_id requires --num_classes for class-conditional sampling.")
+        y = torch.full((args.batch_size,), args.class_id, dtype=torch.long, device=device)
+        print(f"[*] Class-conditional sampling with class_id={args.class_id}")
+
     print("[*] Performing 1-step generation...")
     generated_images = generate_one_step(
         model=sampling_ema_model,
@@ -60,6 +84,7 @@ def main():
         image_size=args.image_size,
         device=device,
         sigma_max=80.0,
+        y=y,
     )
 
     # De-normalize from [-1, 1] to [0, 1] for saving
