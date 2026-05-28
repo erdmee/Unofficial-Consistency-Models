@@ -37,6 +37,7 @@ Thumbs.db
 runs/
 outputs/
 checkpoints/
+pretrained/
 wandb/
 mlruns/
 lightning_logs/
