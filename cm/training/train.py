@@ -96,6 +96,11 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
         log_every=cfg["logging"]["log_every"],
         use_fp16=cfg["training"].get("use_fp16", False),
         sampling_ema_decay=cfg["training"].get("sampling_ema_decay", 0.9999),
+        class_cond=cfg["model"].get("num_classes") is not None,
+        use_wandb=cfg["logging"].get("use_wandb", False),
+        wandb_project=cfg["logging"].get("wandb_project", "consistency-models"),
+        wandb_run_name=cfg["logging"].get("wandb_run_name"),
+        wandb_config={"mode": "cd", **cfg},
     )
     trainer.train()
 
@@ -142,6 +147,11 @@ def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
         log_every=cfg["logging"]["log_every"],
         use_fp16=cfg["training"].get("use_fp16", False),
         sampling_ema_decay=cfg["training"].get("sampling_ema_decay", 0.9999),
+        class_cond=cfg["model"].get("num_classes") is not None,
+        use_wandb=cfg["logging"].get("use_wandb", False),
+        wandb_project=cfg["logging"].get("wandb_project", "consistency-models"),
+        wandb_run_name=cfg["logging"].get("wandb_run_name"),
+        wandb_config={"mode": "ct", **cfg},
     )
     trainer.train()
 

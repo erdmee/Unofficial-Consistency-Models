@@ -29,6 +29,9 @@ logging:
   ckpt_every: 5000
   log_every: 50
   out_dir: runs/cifar10_cd
+  use_wandb: true
+  wandb_project: consistency-models
+  wandb_run_name: null
 
 schedule:
   sigma_min: 0.002

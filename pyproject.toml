@@ -4,15 +4,32 @@ version = "0.0.0"
 description = "Unofficial PyTorch implementation of Consistency Models (local dev env)"
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.1",
-    "torchvision>=0.16",
+    "torch==2.5.1",
+    "torchvision==0.20.1",
     "pillow>=10.0",
     "tqdm>=4.65",
     "pyyaml>=6.0",
     "piq>=0.8.0",
+    "wandb>=0.18",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+]
+
+# On Linux, pull torch/torchvision from PyTorch's CUDA 12.1 index. The Elice
+# A100 host driver maxes out at CUDA 12.2, so newer cu124/cu130 wheels won't
+# load. Default PyPI is used on macOS (CPU/MPS).
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu121", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cu121", marker = "sys_platform == 'linux'" },
 ]

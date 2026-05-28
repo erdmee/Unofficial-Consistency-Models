@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import torch
 import torch.distributed as dist
@@ -34,6 +35,11 @@ class CTTrainer:
         log_every: int = 50,
         use_fp16: bool = False,
         sampling_ema_decay: float = 0.9999,
+        class_cond: bool = False,
+        use_wandb: bool = False,
+        wandb_project: str = "consistency-models",
+        wandb_run_name: str | None = None,
+        wandb_config: dict | None = None,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
@@ -46,6 +52,7 @@ class CTTrainer:
         self.log_every = log_every
         self.use_fp16 = use_fp16
         self.sampling_ema_decay = sampling_ema_decay
+        self.class_cond = class_cond
 
         self._setup_ddp()
 
@@ -80,12 +87,22 @@ class CTTrainer:
             data_dir=data_dir,
             batch_size=self.batch_size,
             image_size=self.image_size,
+            class_cond=self.class_cond,
         )
 
         if self.use_lpips:
             self.lpips_fn = LPIPS(replace_pooling=True, reduction="none").to(self.device)
         else:
             self.lpips_fn = None
+
+        self.use_wandb = use_wandb and self.is_main_process
+        if self.use_wandb:
+            import wandb
+            self._wandb = wandb
+            run_name = wandb_run_name or f"ct_{datetime.now():%Y%m%d_%H%M%S}"
+            wandb.init(project=wandb_project, name=run_name, config=wandb_config or {})
+        else:
+            self._wandb = None
 
     def _setup_ddp(self):
         self.is_distributed = "WORLD_SIZE" in os.environ
@@ -122,8 +139,9 @@ class CTTrainer:
             N_k  = n_schedule(step, self.max_steps, self.s0, self.s1)
             mu_k = mu_schedule(step, self.max_steps, self.mu0, self.s0, self.s1)
 
-            images, _ = next(self.data_generator)
+            images, cond = next(self.data_generator)
             images = images.to(self.device)
+            y = cond["y"].to(self.device) if self.class_cond else None
 
             with torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.use_fp16):
                 loss = consistency_training_loss(
@@ -133,6 +151,7 @@ class CTTrainer:
                     num_scales=N_k,
                     use_lpips=self.use_lpips,
                     lpips_loss_fn=self.lpips_fn,
+                    y=y,
                 )
 
             self.scaler.scale(loss).backward()
@@ -148,6 +167,16 @@ class CTTrainer:
                     f"N(k)={N_k} | μ(k)={mu_k:.5f} | "
                     f"CT Loss: {loss.item():.4f}"
                 )
+                if self.use_wandb:
+                    self._wandb.log(
+                        {
+                            "loss": loss.item(),
+                            "lr": self.optimizer.param_groups[0]["lr"],
+                            "N_k": N_k,
+                            "mu_k": mu_k,
+                        },
+                        step=step,
+                    )
 
             if self.is_main_process and step > 0 and step % self.save_interval == 0:
                 save_checkpoint(
@@ -158,6 +187,9 @@ class CTTrainer:
                     optimizer=self.optimizer,
                     sampling_ema_model=self.sampling_ema_model,
                 )
+
+        if self.use_wandb:
+            self._wandb.finish()
 
         if self.is_distributed:
             dist.destroy_process_group()
