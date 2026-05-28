@@ -1,0 +1,36 @@
+data:
+  image_size: 64
+  channels: 3
+  data_dir: ./data/imagenet64/train
+
+model:
+  model_channels: 192
+  channel_mult: [1, 2, 3, 4]
+  num_res_blocks: 3
+  attention_resolutions: [32, 16, 8]
+  num_head_channels: 64
+  dropout: 0.0
+  num_classes: 1000
+
+training:
+  loss: lpips
+  batch_size: 64
+  lr: 0.0001
+  max_steps: 100000
+
+ct:
+  s0: 2
+  s1: 200
+  mu0: 0.95
+  pretrained_ckpt: pretrained/edm_imagenet64_ema.pt
+
+logging:
+  ckpt_every: 5000
+  log_every: 50
+  out_dir: runs/imagenet64_ct
+
+schedule:
+  sigma_min: 0.002
+  sigma_max: 80.0
+  sigma_data: 0.5
+  rho: 7.0

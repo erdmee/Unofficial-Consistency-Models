@@ -18,15 +18,15 @@ training:
   lr: 0.0004
   max_steps: 100000
 
-ct:
-  s0: 2
-  s1: 150
-  mu0: 0.9
+cd:
+  teacher_ckpt: pretrained/edm_cifar10_teacher.pt
+  num_scales: 18
+  target_mu: 0.0
 
 logging:
   ckpt_every: 5000
   log_every: 50
-  out_dir: runs/cifar10_ct
+  out_dir: runs/cifar10_cd
 
 schedule:
   sigma_min: 0.002
