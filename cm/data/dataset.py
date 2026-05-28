@@ -1,13 +1,12 @@
+from typing import Callable, List, Optional
+
 import torch
-from torch.utils.data import Dataset
 from PIL import Image
-from typing import Callable, List, Optional, Tuple, Dict
+from torch.utils.data import Dataset
+
 
 class ImageDataset(Dataset):
-    """
-    A pure Dataset class. It only handles loading the image from disk
-    and applying the provided transform function.
-    """
+    """Loads images from a path list and applies a single transform pipeline."""
     def __init__(
         self,
         image_paths: List[str],
@@ -24,18 +23,16 @@ class ImageDataset(Dataset):
 
     def __getitem__(self, idx):
         path = self.local_images[idx]
-        
+
         with open(path, "rb") as f:
             pil_image = Image.open(f)
             pil_image.load()
-            
-        pil_image = pil_image.convert("RGB")
 
-        # Apply the injected transform pipeline
+        pil_image = pil_image.convert("RGB")
         tensor = self.transform(pil_image)
 
         out_dict = {}
         if self.local_classes is not None:
             out_dict["y"] = torch.tensor(self.local_classes[idx], dtype=torch.long)
-            
+
         return tensor, out_dict

@@ -1,13 +1,12 @@
 from torchvision import transforms
 
+
 def build_transforms(
-    resolution: int, 
-    random_crop: bool = False, 
-    random_flip: bool = True
+    resolution: int,
+    random_crop: bool = False,
+    random_flip: bool = True,
 ):
-    """
-    Builds the torchvision transform pipeline.
-    """
+    """torchvision transform pipeline → tensor normalized to [-1, 1]."""
     transform_list = []
 
     if random_crop:
@@ -16,17 +15,17 @@ def build_transforms(
                 size=resolution,
                 scale=(0.8, 1.0),
                 interpolation=transforms.InterpolationMode.BICUBIC,
-                antialias=True
+                antialias=True,
             )
         )
     else:
         transform_list.extend([
             transforms.Resize(
-                size=resolution, 
-                interpolation=transforms.InterpolationMode.BICUBIC, 
-                antialias=True
+                size=resolution,
+                interpolation=transforms.InterpolationMode.BICUBIC,
+                antialias=True,
             ),
-            transforms.CenterCrop(resolution)
+            transforms.CenterCrop(resolution),
         ])
 
     if random_flip:
@@ -34,7 +33,7 @@ def build_transforms(
 
     transform_list.extend([
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ])
 
     return transforms.Compose(transform_list)

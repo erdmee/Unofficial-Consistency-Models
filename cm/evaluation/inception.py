@@ -1,7 +1,7 @@
 """
 InceptionV3 feature extractor for FID.
 
-We load the *FID Inception* weights — i.e. the TF inception checkpoint that
+We load the FID Inception weights — i.e. the TF inception checkpoint that
 Heusel et al. 2017 used and that every diffusion paper since (DDPM, ADM, EDM,
 CM, ...) reports FID against. These weights are hosted by `pytorch-fid`
 (MIT-licensed) at:
