@@ -2,7 +2,7 @@
 name = "consistency-models"
 version = "0.0.0"
 description = "Unofficial PyTorch implementation of Consistency Models (local dev env)"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "torch==2.5.1",
     "torchvision==0.20.1",
