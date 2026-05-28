@@ -1,8 +1,9 @@
 import os
+
 import torch
 import torch.distributed as dist
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.amp import autocast, GradScaler
 from torch.optim import AdamW
 from piq import LPIPS
 
@@ -25,11 +26,11 @@ class CTTrainer:
         lr: float = 2e-4,
         max_steps: int = 800_000,
         save_interval: int = 5000,
-        # CT-specific schedule knobs (Song et al. 2023, Section 5)
         s0: int = 2,
         s1: int = 150,
         mu0: float = 0.95,
         use_lpips: bool = True,
+        log_every: int = 50,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
@@ -39,10 +40,10 @@ class CTTrainer:
         self.s0 = s0
         self.s1 = s1
         self.mu0 = mu0
+        self.log_every = log_every
 
         self._setup_ddp()
 
-        # 1. Models — target starts frozen, will be EMA-updated each step
         self.online_model = online_model
         self.target_model = target_model
         self.target_model.requires_grad_(False)
@@ -55,7 +56,6 @@ class CTTrainer:
                 output_device=self.local_rank,
             )
 
-        # 2. Optimizer + AMP scaler
         online_params = (
             self.online_model.module.parameters()
             if self.is_distributed
@@ -68,14 +68,12 @@ class CTTrainer:
         if resume_ckpt and os.path.exists(resume_ckpt):
             self._resume_training(resume_ckpt)
 
-        # 3. Infinite data generator
         self.data_generator = create_data_loader(
             data_dir=data_dir,
             batch_size=self.batch_size,
             image_size=self.image_size,
         )
 
-        # 4. LPIPS distance metric (paper's default d(·,·) on CIFAR-10)
         if self.use_lpips:
             self.lpips_fn = LPIPS(replace_pooling=True, reduction="none").to(self.device)
         else:
@@ -112,15 +110,12 @@ class CTTrainer:
             self.online_model.train()
             self.optimizer.zero_grad()
 
-            # 1. Step-dependent schedules — the heart of CT
             N_k  = n_schedule(step, self.max_steps, self.s0, self.s1)
             mu_k = mu_schedule(step, self.max_steps, self.mu0, self.s0, self.s1)
 
-            # 2. Fetch a batch
             images, _ = next(self.data_generator)
             images = images.to(self.device)
 
-            # 3. CT loss under AMP
             with torch.autocast(device_type=self.device.type, dtype=torch.float16):
                 loss = consistency_training_loss(
                     online_model=self.online_model,
@@ -131,16 +126,13 @@ class CTTrainer:
                     lpips_loss_fn=self.lpips_fn,
                 )
 
-            # 4. Backward + optimizer step
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            # 5. EMA target update with this step's μ(k)
             update_ema(self.target_model, self.online_model, mu=mu_k)
 
-            # 6. Logging & checkpointing
-            if self.is_main_process and step % 100 == 0:
+            if self.is_main_process and step % self.log_every == 0:
                 print(
                     f"Step {step}/{self.max_steps} | "
                     f"N(k)={N_k} | μ(k)={mu_k:.5f} | "

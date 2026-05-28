@@ -1,8 +1,9 @@
 import os
+
 import torch
 import torch.distributed as dist
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.amp import autocast, GradScaler
 from torch.optim import AdamW
 from piq import LPIPS
 
@@ -10,6 +11,7 @@ from cm.data.loader import create_data_loader
 from cm.utils.checkpoint import save_checkpoint, load_checkpoint
 from cm.training.ema import update_ema
 from cm.training.losses import consistency_distillation_loss
+
 
 class CDTrainer:
     def __init__(
@@ -25,16 +27,21 @@ class CDTrainer:
         max_steps: int = 100000,
         save_interval: int = 5000,
         use_lpips: bool = True,
+        num_scales: int = 18,
+        target_mu: float = 0.95,
+        log_every: int = 50,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
         self.max_steps = max_steps
         self.save_interval = save_interval
         self.use_lpips = use_lpips
+        self.num_scales = num_scales
+        self.target_mu = target_mu
+        self.log_every = log_every
 
         self._setup_ddp()
 
-        # 1. Save the injected models and map to DDP if distributed
         self.online_model = online_model
         self.target_model = target_model
         self.teacher_model = teacher_model
@@ -42,7 +49,6 @@ class CDTrainer:
         if self.is_distributed:
             self.online_model = DDP(self.online_model, device_ids=[self.local_rank], output_device=self.local_rank)
 
-        # 2. Optimizer & Data Loader setup
         online_params = self.online_model.module.parameters() if self.is_distributed else self.online_model.parameters()
         self.optimizer = AdamW(online_params, lr=lr)
         self.scaler = GradScaler(self.device.type)
@@ -54,7 +60,7 @@ class CDTrainer:
         self.data_generator = create_data_loader(
             data_dir=data_dir,
             batch_size=self.batch_size,
-            image_size=self.image_size
+            image_size=self.image_size,
         )
 
         if self.use_lpips:
@@ -63,7 +69,6 @@ class CDTrainer:
             self.lpips_fn = None
 
     def _setup_ddp(self):
-        # ddp setup logic (same as before, but now in a separate method for clarity)
         self.is_distributed = "WORLD_SIZE" in os.environ
         if self.is_distributed:
             dist.init_process_group(backend="nccl")
@@ -83,7 +88,7 @@ class CDTrainer:
             ema_model=self.target_model,
             model=self.online_model.module if self.is_distributed else self.online_model,
             optimizer=self.optimizer,
-            device=str(self.device)
+            device=str(self.device),
         )
 
     def train(self):
@@ -103,20 +108,18 @@ class CDTrainer:
                     target_model=self.target_model,
                     teacher_model=self.teacher_model,
                     images=images,
-                    num_scales=18,
+                    num_scales=self.num_scales,
                     use_lpips=self.use_lpips,
-                    lpips_loss_fn=self.lpips_fn
+                    lpips_loss_fn=self.lpips_fn,
                 )
 
-            # AMP backward and optimizer step
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
-            update_ema(self.target_model, self.online_model, mu=0.999)
+            update_ema(self.target_model, self.online_model, mu=self.target_mu)
 
-            # Logging & Saving
-            if self.is_main_process and step % 100 == 0:
+            if self.is_main_process and step % self.log_every == 0:
                 print(f"Step {step}/{self.max_steps} | CD Loss: {loss.item():.4f}")
 
             if self.is_main_process and step > 0 and step % self.save_interval == 0:
@@ -125,7 +128,7 @@ class CDTrainer:
                     step=step,
                     ema_model=self.target_model,
                     model=self.online_model.module if self.is_distributed else self.online_model,
-                    optimizer=self.optimizer
+                    optimizer=self.optimizer,
                 )
 
         if self.is_distributed:
