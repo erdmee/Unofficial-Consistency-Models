@@ -60,7 +60,7 @@ def main():
     sampling_ema_model = ConsistencyPrecond(UNetModel(**unet_kwargs)).to(device)
 
     print(f"[*] Loading checkpoint from {args.ckpt}...")
-    step, _ = load_checkpoint(
+    step, _, _ = load_checkpoint(
         load_path=args.ckpt,
         ema_model=target_model,
         model=None,

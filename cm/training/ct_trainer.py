@@ -40,6 +40,8 @@ class CTTrainer:
         wandb_project: str = "consistency-models",
         wandb_run_name: str | None = None,
         wandb_config: dict | None = None,
+        keep_last_steps: int = 100_000,
+        keep_milestone_every: int = 100_000,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
@@ -53,6 +55,8 @@ class CTTrainer:
         self.use_fp16 = use_fp16
         self.sampling_ema_decay = sampling_ema_decay
         self.class_cond = class_cond
+        self.keep_last_steps = keep_last_steps
+        self.keep_milestone_every = keep_milestone_every
 
         self._setup_ddp()
 
@@ -80,6 +84,7 @@ class CTTrainer:
         self.scaler = GradScaler(self.device.type, enabled=self.use_fp16)
 
         self.start_step = 0
+        self.wandb_run_id: str | None = None
         if resume_ckpt and os.path.exists(resume_ckpt):
             self._resume_training(resume_ckpt)
 
@@ -99,8 +104,17 @@ class CTTrainer:
         if self.use_wandb:
             import wandb
             self._wandb = wandb
-            run_name = wandb_run_name or f"ct_{datetime.now():%Y%m%d_%H%M%S}"
-            wandb.init(project=wandb_project, name=run_name, config=wandb_config or {})
+            if self.wandb_run_id:
+                wandb.init(
+                    project=wandb_project,
+                    id=self.wandb_run_id,
+                    resume="allow",
+                    config=wandb_config or {},
+                )
+            else:
+                run_name = wandb_run_name or f"ct_{datetime.now():%Y%m%d_%H%M%S}"
+                wandb.init(project=wandb_project, name=run_name, config=wandb_config or {})
+            self.wandb_run_id = self._wandb.run.id
         else:
             self._wandb = None
 
@@ -119,7 +133,7 @@ class CTTrainer:
     def _resume_training(self, resume_ckpt: str):
         if self.is_main_process:
             print(f"[*] Resuming training from {resume_ckpt}...")
-        self.start_step, _ = load_checkpoint(
+        loaded_step, _, self.wandb_run_id = load_checkpoint(
             load_path=resume_ckpt,
             ema_model=self.target_model,
             model=self.online_model.module if self.is_distributed else self.online_model,
@@ -127,6 +141,7 @@ class CTTrainer:
             sampling_ema_model=self.sampling_ema_model,
             device=str(self.device),
         )
+        self.start_step = loaded_step + 1
 
     def train(self):
         if self.is_main_process:
@@ -155,6 +170,17 @@ class CTTrainer:
                 )
 
             self.scaler.scale(loss).backward()
+
+            grad_norm = None
+            param_norm = None
+            if self.is_main_process and step % self.log_every == 0:
+                with torch.no_grad():
+                    params = list(self.online_model.parameters())
+                    param_norm = torch.stack([p.norm(2) for p in params]).norm(2).item()
+                    grad_norms = torch.stack([p.grad.norm(2) for p in params if p.grad is not None])
+                    grad_scale = self.scaler.get_scale() if self.use_fp16 else 1.0
+                    grad_norm = (grad_norms.norm(2) / grad_scale).item()
+
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
@@ -165,7 +191,8 @@ class CTTrainer:
                 print(
                     f"Step {step}/{self.max_steps} | "
                     f"N(k)={N_k} | μ(k)={mu_k:.5f} | "
-                    f"CT Loss: {loss.item():.4f}"
+                    f"CT Loss: {loss.item():.4f} | "
+                    f"grad_norm={grad_norm:.3f} | param_norm={param_norm:.3f}"
                 )
                 if self.use_wandb:
                     self._wandb.log(
@@ -174,6 +201,8 @@ class CTTrainer:
                             "lr": self.optimizer.param_groups[0]["lr"],
                             "N_k": N_k,
                             "mu_k": mu_k,
+                            "grad_norm": grad_norm,
+                            "param_norm": param_norm,
                         },
                         step=step,
                     )
@@ -186,7 +215,24 @@ class CTTrainer:
                     model=self.online_model.module if self.is_distributed else self.online_model,
                     optimizer=self.optimizer,
                     sampling_ema_model=self.sampling_ema_model,
+                    keep_last_steps=self.keep_last_steps,
+                    keep_milestone_every=self.keep_milestone_every,
+                    wandb_run_id=self.wandb_run_id,
                 )
+
+        if self.is_main_process and self.max_steps > 0:
+            final_step = self.max_steps - 1
+            save_checkpoint(
+                save_path=f"checkpoints/step_{final_step:06d}.pt",
+                step=final_step,
+                ema_model=self.target_model,
+                model=self.online_model.module if self.is_distributed else self.online_model,
+                optimizer=self.optimizer,
+                sampling_ema_model=self.sampling_ema_model,
+                keep_last_steps=self.keep_last_steps,
+                keep_milestone_every=self.keep_milestone_every,
+                wandb_run_id=self.wandb_run_id,
+            )
 
         if self.use_wandb:
             self._wandb.finish()
