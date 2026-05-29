@@ -16,7 +16,7 @@ training:
   loss: lpips
   batch_size: 64
   lr: 0.000008
-  max_steps: 100000
+  max_steps: 1000000
   use_fp16: true
   sampling_ema_decay: 0.999943
 
