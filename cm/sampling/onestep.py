@@ -3,9 +3,7 @@ import argparse
 import torch
 from torchvision.utils import save_image
 
-from cm.models.unet import UNetModel
-from cm.models.precond import ConsistencyPrecond
-from cm.utils.checkpoint import load_checkpoint
+from cm.sampling.loader import load_consistency_model, resolve_labels
 
 
 @torch.no_grad()
@@ -17,10 +15,8 @@ def generate_one_step(
     sigma_max: float = 80.0,
     y: torch.Tensor | None = None,
 ):
-    """1-step generation from a trained Consistency Model. Returns images in [-1, 1].
-
-    `y` is the per-sample class label tensor for class-conditional models (None for unconditional).
-    """
+    """1-step generation from a Consistency Model. Returns images in [-1, 1].
+    `y` is the class-label tensor for class-conditional models (None otherwise)."""
     model.eval()
 
     shape = (batch_size, 3, image_size, image_size)
@@ -34,56 +30,58 @@ def generate_one_step(
 def main():
     parser = argparse.ArgumentParser(description="1-Step Sampling for Consistency Models")
     parser.add_argument("--ckpt", type=str, required=True, help="Path to the trained checkpoint (.pt)")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Training config YAML used to reconstruct the architecture when the checkpoint has no "
+             "embedded config (e.g. configs/cifar10_cd.yaml). Ignored if the checkpoint already has one.",
+    )
     parser.add_argument("--batch_size", type=int, default=64, help="Number of images to generate")
-    parser.add_argument("--image_size", type=int, default=32, help="Image resolution")
-    parser.add_argument("--out_path", type=str, default="sample_1step.png", help="Output image path")
+    parser.add_argument("--out_path", type=str, default="sample.png", help="Output image path")
     parser.add_argument(
         "--class_id",
         type=int,
         default=None,
-        help="Class label for class-conditional models. Applied to all samples in the batch. "
-             "Omit for unconditional models.",
+        help="Class label for class-conditional models (e.g. ImageNet-64), applied to all samples. "
+             "Omit to sample random classes. Must be omitted for unconditional models (e.g. CIFAR-10).",
     )
     parser.add_argument(
-        "--num_classes",
+        "--seed",
         type=int,
         default=None,
-        help="Number of classes the model was trained with (required for class-conditional checkpoints).",
+        help="RNG seed for reproducible noise (and random class labels). Omit for fresh randomness.",
     )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[*] Generating on device: {device}")
 
-    unet_kwargs = dict(in_channels=3, model_channels=128, out_channels=3, num_classes=args.num_classes)
-    target_model = ConsistencyPrecond(UNetModel(**unet_kwargs)).to(device)
-    sampling_ema_model = ConsistencyPrecond(UNetModel(**unet_kwargs)).to(device)
-
     print(f"[*] Loading checkpoint from {args.ckpt}...")
-    step, _, _ = load_checkpoint(
-        load_path=args.ckpt,
-        ema_model=target_model,
-        model=None,
-        optimizer=None,
-        sampling_ema_model=sampling_ema_model,
-        device=str(device),
-    )
-    print(f"[*] Successfully loaded sampling EMA model from step {step}.")
+    model, config, step = load_consistency_model(args.ckpt, device, args.config)
 
-    y = None
-    if args.class_id is not None:
-        if args.num_classes is None:
-            raise ValueError("--class_id requires --num_classes for class-conditional sampling.")
-        y = torch.full((args.batch_size,), args.class_id, dtype=torch.long, device=device)
-        print(f"[*] Class-conditional sampling with class_id={args.class_id}")
+    image_size = config["data"]["image_size"]
+    sigma_max = config.get("schedule", {}).get("sigma_max", 80.0)
+    num_classes = config["model"].get("num_classes")
+    print(
+        f"[*] Loaded sampling EMA model from step {step} "
+        f"(image_size={image_size}, model_channels={config['model']['model_channels']}, "
+        f"num_classes={num_classes})."
+    )
+
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        print(f"[*] Using seed {args.seed}.")
+
+    y = resolve_labels(num_classes, args.batch_size, args.class_id, device)
 
     print("[*] Performing 1-step generation...")
     generated_images = generate_one_step(
-        model=sampling_ema_model,
+        model=model,
         batch_size=args.batch_size,
-        image_size=args.image_size,
+        image_size=image_size,
         device=device,
-        sigma_max=80.0,
+        sigma_max=sigma_max,
         y=y,
     )
 
