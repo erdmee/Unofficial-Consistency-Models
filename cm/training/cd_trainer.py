@@ -29,6 +29,8 @@ class CDTrainer:
         max_steps: int = 100000,
         save_interval: int = 5000,
         use_lpips: bool = True,
+        lambda_spectral: float = 0.0,
+        spectral_hp_cutoff: float = 0.5,
         num_scales: int = 18,
         target_mu: float = 0.95,
         log_every: int = 50,
@@ -47,6 +49,8 @@ class CDTrainer:
         self.max_steps = max_steps
         self.save_interval = save_interval
         self.use_lpips = use_lpips
+        self.lambda_spectral = lambda_spectral
+        self.spectral_hp_cutoff = spectral_hp_cutoff
         self.num_scales = num_scales
         self.target_mu = target_mu
         self.log_every = log_every
@@ -153,6 +157,8 @@ class CDTrainer:
                     num_scales=self.num_scales,
                     use_lpips=self.use_lpips,
                     lpips_loss_fn=self.lpips_fn,
+                    lambda_spectral=self.lambda_spectral,
+                    spectral_hp_cutoff=self.spectral_hp_cutoff,
                     y=y,
                 )
 

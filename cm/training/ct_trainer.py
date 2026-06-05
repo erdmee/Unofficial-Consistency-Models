@@ -32,6 +32,8 @@ class CTTrainer:
         s1: int = 150,
         mu0: float = 0.95,
         use_lpips: bool = True,
+        lambda_spectral: float = 0.0,
+        spectral_hp_cutoff: float = 0.5,
         log_every: int = 50,
         use_fp16: bool = False,
         sampling_ema_decay: float = 0.9999,
@@ -48,6 +50,8 @@ class CTTrainer:
         self.max_steps = max_steps
         self.save_interval = save_interval
         self.use_lpips = use_lpips
+        self.lambda_spectral = lambda_spectral
+        self.spectral_hp_cutoff = spectral_hp_cutoff
         self.s0 = s0
         self.s1 = s1
         self.mu0 = mu0
@@ -166,6 +170,8 @@ class CTTrainer:
                     num_scales=N_k,
                     use_lpips=self.use_lpips,
                     lpips_loss_fn=self.lpips_fn,
+                    lambda_spectral=self.lambda_spectral,
+                    spectral_hp_cutoff=self.spectral_hp_cutoff,
                     y=y,
                 )
 

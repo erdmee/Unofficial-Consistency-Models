@@ -54,6 +54,7 @@ def load_inner_unet(precond_model: torch.nn.Module, ckpt_path: str, device: torc
 def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
     print("[train] mode=cd")
     cd_cfg = cfg["cd"]
+    spectral_cfg = cfg.get("spectral", {})
     teacher_ckpt = cd_cfg["teacher_ckpt"]
     if not Path(teacher_ckpt).is_file():
         raise FileNotFoundError(
@@ -91,6 +92,8 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
         max_steps=cfg["training"]["max_steps"],
         save_interval=cfg["logging"]["ckpt_every"],
         use_lpips=(cfg["training"]["loss"] == "lpips"),
+        lambda_spectral=spectral_cfg.get("lambda", 0.0),
+        spectral_hp_cutoff=spectral_cfg.get("hp_cutoff", 0.5),
         num_scales=cd_cfg["num_scales"],
         target_mu=cd_cfg["target_mu"],
         log_every=cfg["logging"]["log_every"],
@@ -108,6 +111,7 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
 def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
     print("[train] mode=ct")
     ct_cfg = cfg["ct"]
+    spectral_cfg = cfg.get("spectral", {})
 
     online = build_consistency(cfg, device)
     target = build_consistency(cfg, device)
@@ -144,6 +148,8 @@ def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
         s1=ct_cfg["s1"],
         mu0=ct_cfg["mu0"],
         use_lpips=(cfg["training"]["loss"] == "lpips"),
+        lambda_spectral=spectral_cfg.get("lambda", 0.0),
+        spectral_hp_cutoff=spectral_cfg.get("hp_cutoff", 0.5),
         log_every=cfg["logging"]["log_every"],
         use_fp16=cfg["training"].get("use_fp16", False),
         sampling_ema_decay=cfg["training"].get("sampling_ema_decay", 0.9999),

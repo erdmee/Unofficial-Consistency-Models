@@ -39,3 +39,7 @@ schedule:
   sigma_max: 80.0
   sigma_data: 0.5
   rho: 7.0
+
+spectral:
+  lambda: 0.0      # >0 enables the SNR-adaptive high-frequency consistency loss
+  hp_cutoff: 0.5   # high-pass cutoff as a fraction of the Nyquist frequency
