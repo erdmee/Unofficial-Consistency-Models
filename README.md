@@ -1,8 +1,61 @@
 # Unofficial Consistency Models
 
-PyTorch implementation of *Consistency Models* (Song et al., 2023) for CIFAR-10
-and class-conditional ImageNet 64×64. Both consistency distillation (CD) from
-an EDM teacher and teacher-free consistency training (CT) are supported.
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.5.1-ee4c2c)
+![License](https://img.shields.io/badge/license-MIT-green)
+[![arXiv](https://img.shields.io/badge/arXiv-2303.01469-b31b1b)](https://arxiv.org/abs/2303.01469)
+
+A clean, from-scratch PyTorch reimplementation of *Consistency Models*
+(Song et al., 2023) — generative models that produce an image in a **single
+network evaluation**, with optional few-step refinement. Both training routes
+are supported: **consistency distillation (CD)** from an EDM teacher, and
+teacher-free **consistency training (CT)**. Targets are CIFAR-10 and
+class-conditional ImageNet 64×64.
+
+## Method overview
+
+Diffusion models map noise to data by integrating a probability-flow ODE,
+which costs tens to hundreds of network evaluations. A consistency model
+short-circuits that ODE by learning a **consistency function**
+`f(x_t, t) ≈ x_ε` that sends *any* point on a trajectory directly back to its
+origin. Because every point on the same trajectory maps to the same `x_ε`,
+generation collapses to one evaluation: draw `x_T ~ N(0, T²I)` and return
+`f(x_T, T)` (`cm/sampling/onestep.py`).
+
+**Boundary condition.** The function is parameterized so that `f(x, ε) = x`
+holds exactly at the smallest noise level `ε = 0.002`. This is baked into the
+preconditioning rather than learned: `ConsistencyPrecond` uses skip/output
+coefficients with `c_skip → 1`, `c_out → 0` as `t → ε`
+(`cm/models/precond.py`). The teacher network instead uses plain EDM
+preconditioning (`EDMPrecond`). Noise levels follow the Karras schedule
+(`σ_min = 0.002`, `σ_max = 80`, `ρ = 7`; `cm/diffusion/karras_schedule.py`).
+
+**Two ways to train the same function:**
+
+- **Consistency Distillation (CD).** Adjacent trajectory points `t_n < t_{n+1}`
+  are connected by a single Heun step of a frozen EDM teacher. The online model
+  sees the high-noise point `x_{t_{n+1}}` and is pulled toward the target
+  model's output at the teacher-denoised point `x_{t_n}`
+  (`consistency_distillation_loss`).
+- **Consistency Training (CT).** No teacher. The pair
+  `(x_{t_n}, x_{t_{n+1}})` is built from the **same** noise sample `z`, an
+  unbiased one-sample estimate of the ODE step that removes the teacher
+  entirely (`consistency_training_loss`, paper Algorithm 3). The
+  discretization count `N(k)` is annealed `s₀ → s₁` over training (paper Eq. 11).
+
+Both losses minimize a distance between the online and target predictions,
+weighted by `SNR + 1/σ_data²` (optionally LPIPS instead of squared error).
+
+**EMA targets.** The *target* model that supplies the regression target is an
+EMA of the online weights, with decay `μ(k) = exp(s₀·log μ₀ / N(k))` in CT so
+the averaging window stays roughly constant as `N(k)` grows. A **separate
+sampling EMA** (decay ≈ 0.9999) is maintained purely for generation and is what
+the samplers load by default (paper §4).
+
+**Generation.** One-step sampling evaluates `f(x_T, T)` once. The multi-step
+sampler (`cm/sampling/multistep.py`) trades a few evaluations for quality by
+alternately denoising to `x_ε` and re-noising to a descending list of
+intermediate levels τ.
 
 ## Setup
 
@@ -130,3 +183,16 @@ tests/         shape and numerical sanity tests
 - Dhariwal, P., Nichol, A. *Diffusion Models Beat GANs on Image Synthesis*.
   NeurIPS 2021.
   [arXiv:2105.05233](https://arxiv.org/abs/2105.05233).
+
+## Citation
+
+If this reimplementation is useful, please cite the original paper:
+
+```bibtex
+@inproceedings{song2023consistency,
+  title     = {Consistency Models},
+  author    = {Song, Yang and Dhariwal, Prafulla and Chen, Mark and Sutskever, Ilya},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  year      = {2023}
+}
+```
