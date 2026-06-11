@@ -128,7 +128,7 @@ A separate **sampling EMA** is maintained alongside the **target EMA** (paper
 | Target EMA μ | 0.0 | schedule | 0.95 | schedule |
 | Sampling EMA | 0.9999 | 0.9999 | 0.999943 | 0.999943 |
 | N (CD) / s₀→s₁ (CT) | 18 | 2 → 150 | 40 | 2 → 200 |
-| Max steps | 100k | 100k | 100k | 100k |
+| Max steps | 150k | 150k | 150k | 150k |
 
 Batch sizes and step counts are reduced from the paper (paper uses 512/2048
 and 600–800k steps). Edit the YAML to scale up if you have the compute budget.
