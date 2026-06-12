@@ -87,6 +87,65 @@ def test_legacy_checkpoint_without_wandb_run_id_key(tmp_path):
     assert run_id is None
 
 
+def test_scaler_state_roundtrip(tmp_path):
+    """A non-empty scaler state must survive save → load."""
+    model, ema, sampling_ema, opt = _build_pair(tmp_path)
+    path = tmp_path / "step_000010.pt"
+    save_checkpoint(
+        save_path=str(path),
+        step=10,
+        ema_model=ema,
+        model=model,
+        optimizer=opt,
+        sampling_ema_model=sampling_ema,
+    )
+    # Inject a synthetic fp16-style scaler state (CPU tests can't run a real CUDA scaler)
+    ckpt = torch.load(path)
+    ckpt["scaler_state_dict"] = {
+        "scale": 1024.0,
+        "growth_factor": 2.0,
+        "backoff_factor": 0.5,
+        "growth_interval": 2000,
+        "_growth_tracker": 7,
+    }
+    torch.save(ckpt, path)
+
+    scaler = torch.amp.GradScaler("cpu", enabled=True)
+    load_checkpoint(load_path=str(path), ema_model=nn.Linear(4, 4), scaler=scaler)
+    assert scaler.get_scale() == 1024.0
+
+
+def test_scaler_empty_state_is_skipped(tmp_path):
+    """A disabled scaler saves {} — loading must skip it instead of raising."""
+    model, ema, sampling_ema, opt = _build_pair(tmp_path)
+    path = tmp_path / "step_000011.pt"
+    save_checkpoint(
+        save_path=str(path),
+        step=11,
+        ema_model=ema,
+        model=model,
+        optimizer=opt,
+        sampling_ema_model=sampling_ema,
+        scaler=torch.amp.GradScaler("cpu", enabled=False),  # state_dict() == {}
+    )
+    scaler = torch.amp.GradScaler("cpu", enabled=True)
+    load_checkpoint(load_path=str(path), ema_model=nn.Linear(4, 4), scaler=scaler)  # no raise
+
+
+def test_legacy_checkpoint_without_scaler_key(tmp_path):
+    """Checkpoints saved before scaler_state_dict existed must still load."""
+    path = tmp_path / "legacy_noscaler.pt"
+    legacy = {
+        "step": 7,
+        "ema_state_dict": nn.Linear(4, 4).state_dict(),
+        # NOTE: no "scaler_state_dict" key at all
+    }
+    torch.save(legacy, path)
+    scaler = torch.amp.GradScaler("cpu", enabled=True)
+    step, _, _ = load_checkpoint(load_path=str(path), ema_model=nn.Linear(4, 4), scaler=scaler)
+    assert step == 7
+
+
 def test_resume_start_step_is_saved_plus_one(tmp_path, monkeypatch):
     """Off-by-one fix: a ckpt saved at step N must resume at step N+1, not N."""
     # Import here so monkeypatching cm.training.train doesn't leak between tests
@@ -116,6 +175,7 @@ def test_resume_start_step_is_saved_plus_one(tmp_path, monkeypatch):
             self.online_model = model
             self.sampling_ema_model = sampling_ema
             self.optimizer = opt
+            self.scaler = torch.amp.GradScaler("cpu", enabled=False)
             self.start_step = 0
             self.wandb_run_id = None
             ct_mod.CTTrainer._resume_training(self, str(ckpt_path))

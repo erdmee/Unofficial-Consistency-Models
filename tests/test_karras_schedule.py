@@ -1,6 +1,6 @@
 import torch
 
-from cm.diffusion.karras_schedule import karras_sigmas, n_schedule
+from cm.diffusion.karras_schedule import ScheduleConfig, karras_sigmas, n_schedule
 
 
 def test_karras_sigmas_endpoints():
@@ -24,6 +24,24 @@ def test_n_schedule_endpoints():
     s0, s1, total = 2, 150, 1000
     assert n_schedule(0, total, s0, s1) == s0
     assert n_schedule(total, total, s0, s1) == s1 + 1
+
+
+def test_schedule_config_from_config_overrides_and_defaults():
+    """A yaml schedule value must take effect; missing keys keep paper defaults."""
+    sc = ScheduleConfig.from_config({"schedule": {"sigma_max": 40.0}})
+    assert sc.sigma_max == 40.0
+    assert sc.sigma_min == 0.002
+    assert sc.rho == 7.0
+    assert sc.sigma_data == 0.5
+
+    s = karras_sigmas(N=40, sigma_min=sc.sigma_min, sigma_max=sc.sigma_max, rho=sc.rho)
+    assert torch.isclose(s[-1], torch.tensor(40.0), atol=1e-4)
+
+
+def test_schedule_config_from_config_empty_equals_defaults():
+    """No schedule section (or None) → identical to the hardcoded defaults."""
+    assert ScheduleConfig.from_config({}) == ScheduleConfig()
+    assert ScheduleConfig.from_config({"schedule": None}) == ScheduleConfig()
 
 
 def test_n_schedule_monotonic_non_decreasing():
