@@ -1,6 +1,32 @@
 import math
+from dataclasses import dataclass
 
 import torch
+
+
+@dataclass(frozen=True)
+class ScheduleConfig:
+    """Single source of truth for the noise-schedule parameters.
+
+    Built from the YAML `schedule:` section via `from_config`; defaults match the
+    paper values so configs without that section behave identically.
+    Note: the consistency boundary epsilon is taken as sigma_min (t = ε = σ_min),
+    so changing sigma_min also moves the boundary condition.
+    """
+    sigma_min: float = 0.002
+    sigma_max: float = 80.0
+    rho: float = 7.0
+    sigma_data: float = 0.5
+
+    @classmethod
+    def from_config(cls, cfg: dict) -> "ScheduleConfig":
+        sched = cfg.get("schedule") or {}
+        return cls(
+            sigma_min=float(sched.get("sigma_min", cls.sigma_min)),
+            sigma_max=float(sched.get("sigma_max", cls.sigma_max)),
+            rho=float(sched.get("rho", cls.rho)),
+            sigma_data=float(sched.get("sigma_data", cls.sigma_data)),
+        )
 
 
 def karras_sigmas(
