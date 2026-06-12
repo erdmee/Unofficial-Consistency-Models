@@ -49,6 +49,7 @@ def save_checkpoint(
     keep_last_steps: Optional[int] = None,
     keep_milestone_every: int = 0,
     wandb_run_id: Optional[str] = None,
+    scaler: Optional[torch.amp.GradScaler] = None,
 ) -> None:
     """Save target EMA + online + optimizer (+ optional sampling EMA) to a single .pt file.
 
@@ -70,6 +71,7 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "config": config,
         "wandb_run_id": wandb_run_id,
+        "scaler_state_dict": scaler.state_dict() if scaler is not None else None,
     }
     if sampling_ema_model is not None:
         checkpoint["sampling_ema_state_dict"] = sampling_ema_model.state_dict()
@@ -88,6 +90,7 @@ def load_checkpoint(
     optimizer: Optional[torch.optim.Optimizer] = None,
     sampling_ema_model: Optional[torch.nn.Module] = None,
     device: str = "cpu",
+    scaler: Optional[torch.amp.GradScaler] = None,
 ) -> Tuple[int, Optional[Dict[str, Any]], Optional[str]]:
     """Load checkpoint. For inference only the EMA model is required; pass `model`/`optimizer` to resume training.
 
@@ -106,6 +109,11 @@ def load_checkpoint(
 
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    # Legacy checkpoints may lack the key or hold None/{} (disabled scaler) — skip those.
+    scaler_sd = checkpoint.get("scaler_state_dict")
+    if scaler is not None and scaler_sd:
+        scaler.load_state_dict(scaler_sd)
 
     if sampling_ema_model is not None:
         if "sampling_ema_state_dict" in checkpoint:
