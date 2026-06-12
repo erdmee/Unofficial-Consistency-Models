@@ -49,8 +49,14 @@ def load_consistency_model(ckpt_path: str, device: torch.device, config_path: st
             config = yaml.safe_load(f)
         print(f"[*] Checkpoint has no embedded config; using architecture from '{config_path}'.")
 
-    # Default sigma_data/epsilon to match training (not stored in the state_dict).
-    model = ConsistencyPrecond(build_unet_from_config(config)).to(device)
+    # sigma_data/epsilon are not stored in the state_dict — rebuild them from the
+    # config's schedule section (epsilon = sigma_min), falling back to the defaults.
+    sched = config.get("schedule") or {}
+    model = ConsistencyPrecond(
+        build_unet_from_config(config),
+        sigma_data=float(sched.get("sigma_data", 0.5)),
+        epsilon=float(sched.get("sigma_min", 0.002)),
+    ).to(device)
 
     if "sampling_ema_state_dict" in checkpoint:
         state_dict = checkpoint["sampling_ema_state_dict"]
