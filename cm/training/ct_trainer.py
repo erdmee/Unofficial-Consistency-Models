@@ -12,7 +12,7 @@ from cm.data.loader import create_data_loader
 from cm.utils.checkpoint import save_checkpoint, load_checkpoint
 from cm.training.ema import update_ema
 from cm.training.losses import consistency_training_loss
-from cm.diffusion.karras_schedule import n_schedule, mu_schedule
+from cm.diffusion.karras_schedule import ScheduleConfig, n_schedule, mu_schedule
 
 
 class CTTrainer:
@@ -23,6 +23,7 @@ class CTTrainer:
         sampling_ema_model: torch.nn.Module,
         data_dir: str,
         resume_ckpt: str | None = None,
+        init_ckpt: str | None = None,
         batch_size: int = 512,
         image_size: int = 32,
         lr: float = 2e-4,
@@ -44,6 +45,9 @@ class CTTrainer:
         wandb_config: dict | None = None,
         keep_last_steps: int = 100_000,
         keep_milestone_every: int = 100_000,
+        schedule: ScheduleConfig | None = None,
+        out_dir: str = "checkpoints",
+        config: dict | None = None,
     ):
         self.batch_size = batch_size
         self.image_size = image_size
@@ -61,8 +65,18 @@ class CTTrainer:
         self.class_cond = class_cond
         self.keep_last_steps = keep_last_steps
         self.keep_milestone_every = keep_milestone_every
+        self.schedule = schedule or ScheduleConfig()
+        self.out_dir = out_dir
+        self.config = config
 
         self._setup_ddp()
+
+        if self.is_main_process:
+            s = self.schedule
+            print(
+                f"[train] schedule: sigma_min={s.sigma_min} sigma_max={s.sigma_max} "
+                f"rho={s.rho} sigma_data={s.sigma_data} | ckpt_dir={self.out_dir}"
+            )
 
         self.online_model = online_model
         self.target_model = target_model
@@ -91,6 +105,8 @@ class CTTrainer:
         self.wandb_run_id: str | None = None
         if resume_ckpt and os.path.exists(resume_ckpt):
             self._resume_training(resume_ckpt)
+        elif init_ckpt and os.path.exists(init_ckpt):
+            self._init_from_checkpoint(init_ckpt)
 
         self.data_generator = create_data_loader(
             data_dir=data_dir,
@@ -144,8 +160,22 @@ class CTTrainer:
             optimizer=self.optimizer,
             sampling_ema_model=self.sampling_ema_model,
             device=str(self.device),
+            scaler=self.scaler,
         )
         self.start_step = loaded_step + 1
+
+    def _init_from_checkpoint(self, init_ckpt: str):
+        """Warm-start weights from a checkpoint, keeping step=0 and a fresh optimizer/wandb run."""
+        if self.is_main_process:
+            print(f"[*] Warm-starting weights from {init_ckpt} (step reset to 0, fresh optimizer)...")
+        load_checkpoint(
+            load_path=init_ckpt,
+            ema_model=self.target_model,
+            model=self.online_model.module if self.is_distributed else self.online_model,
+            optimizer=None,
+            sampling_ema_model=self.sampling_ema_model,
+            device=str(self.device),
+        )
 
     def train(self):
         if self.is_main_process:
@@ -168,6 +198,7 @@ class CTTrainer:
                     target_model=self.target_model,
                     images=images,
                     num_scales=N_k,
+                    schedule=self.schedule,
                     use_lpips=self.use_lpips,
                     lpips_loss_fn=self.lpips_fn,
                     lambda_spectral=self.lambda_spectral,
@@ -215,29 +246,33 @@ class CTTrainer:
 
             if self.is_main_process and step > 0 and step % self.save_interval == 0:
                 save_checkpoint(
-                    save_path=f"checkpoints/step_{step:06d}.pt",
+                    save_path=os.path.join(self.out_dir, f"step_{step:06d}.pt"),
                     step=step,
                     ema_model=self.target_model,
                     model=self.online_model.module if self.is_distributed else self.online_model,
                     optimizer=self.optimizer,
                     sampling_ema_model=self.sampling_ema_model,
+                    config=self.config,
                     keep_last_steps=self.keep_last_steps,
                     keep_milestone_every=self.keep_milestone_every,
                     wandb_run_id=self.wandb_run_id,
+                    scaler=self.scaler,
                 )
 
         if self.is_main_process and self.max_steps > 0:
             final_step = self.max_steps - 1
             save_checkpoint(
-                save_path=f"checkpoints/step_{final_step:06d}.pt",
+                save_path=os.path.join(self.out_dir, f"step_{final_step:06d}.pt"),
                 step=final_step,
                 ema_model=self.target_model,
                 model=self.online_model.module if self.is_distributed else self.online_model,
                 optimizer=self.optimizer,
                 sampling_ema_model=self.sampling_ema_model,
+                config=self.config,
                 keep_last_steps=self.keep_last_steps,
                 keep_milestone_every=self.keep_milestone_every,
                 wandb_run_id=self.wandb_run_id,
+                scaler=self.scaler,
             )
 
         if self.use_wandb:

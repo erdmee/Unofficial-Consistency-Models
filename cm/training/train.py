@@ -8,11 +8,22 @@ from cm.models.unet import UNetModel
 from cm.models.precond import ConsistencyPrecond, EDMPrecond
 from cm.training.cd_trainer import CDTrainer
 from cm.training.ct_trainer import CTTrainer
+from cm.diffusion.karras_schedule import ScheduleConfig
 
 
 def load_yaml(path: str) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
+
+
+def apply_cli_overrides(cfg: dict, args) -> None:
+    """Let CLI flags override the YAML in place; None leaves the config value."""
+    if args.max_steps is not None:
+        cfg.setdefault("training", {})["max_steps"] = args.max_steps
+    if args.lambda_spectral is not None:
+        cfg.setdefault("spectral", {})["lambda"] = args.lambda_spectral
+    if args.wandb_run_name is not None:
+        cfg.setdefault("logging", {})["wandb_run_name"] = args.wandb_run_name
 
 
 def build_unet(cfg: dict) -> UNetModel:
@@ -36,14 +47,16 @@ def build_unet(cfg: dict) -> UNetModel:
     return UNetModel(**kwargs)
 
 
-def build_consistency(cfg: dict, device: torch.device) -> ConsistencyPrecond:
-    """Student/target wrapper with boundary condition f(x, ε)=x enforced."""
-    return ConsistencyPrecond(build_unet(cfg)).to(device)
+def build_consistency(cfg: dict, device: torch.device, schedule: ScheduleConfig) -> ConsistencyPrecond:
+    """Student/target wrapper with boundary condition f(x, ε)=x enforced (ε = σ_min)."""
+    return ConsistencyPrecond(
+        build_unet(cfg), sigma_data=schedule.sigma_data, epsilon=schedule.sigma_min
+    ).to(device)
 
 
-def build_edm(cfg: dict, device: torch.device) -> EDMPrecond:
+def build_edm(cfg: dict, device: torch.device, schedule: ScheduleConfig) -> EDMPrecond:
     """Teacher wrapper — standard EDM preconditioning, no boundary."""
-    return EDMPrecond(build_unet(cfg)).to(device)
+    return EDMPrecond(build_unet(cfg), sigma_data=schedule.sigma_data).to(device)
 
 
 def load_inner_unet(precond_model: torch.nn.Module, ckpt_path: str, device: torch.device) -> None:
@@ -55,6 +68,7 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
     print("[train] mode=cd")
     cd_cfg = cfg["cd"]
     spectral_cfg = cfg.get("spectral", {})
+    schedule = ScheduleConfig.from_config(cfg)
     teacher_ckpt = cd_cfg["teacher_ckpt"]
     if not Path(teacher_ckpt).is_file():
         raise FileNotFoundError(
@@ -62,10 +76,10 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
             f"Place a PyTorch state_dict matching our UNet shape there."
         )
 
-    teacher = build_edm(cfg, device)
-    online = build_consistency(cfg, device)
-    target = build_consistency(cfg, device)
-    sampling_ema = build_consistency(cfg, device)
+    teacher = build_edm(cfg, device, schedule)
+    online = build_consistency(cfg, device, schedule)
+    target = build_consistency(cfg, device, schedule)
+    sampling_ema = build_consistency(cfg, device, schedule)
 
     print(f"[train] loading teacher state_dict from {teacher_ckpt}")
     load_inner_unet(teacher, teacher_ckpt, device)
@@ -104,18 +118,22 @@ def run_cd(cfg: dict, device: torch.device, resume: str | None) -> None:
         wandb_project=cfg["logging"].get("wandb_project", "consistency-models"),
         wandb_run_name=cfg["logging"].get("wandb_run_name"),
         wandb_config={"mode": "cd", **cfg},
+        schedule=schedule,
+        out_dir=cfg["logging"].get("out_dir", "checkpoints"),
+        config=cfg,
     )
     trainer.train()
 
 
-def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
+def run_ct(cfg: dict, device: torch.device, resume: str | None, init_ckpt: str | None = None) -> None:
     print("[train] mode=ct")
     ct_cfg = cfg["ct"]
     spectral_cfg = cfg.get("spectral", {})
+    schedule = ScheduleConfig.from_config(cfg)
 
-    online = build_consistency(cfg, device)
-    target = build_consistency(cfg, device)
-    sampling_ema = build_consistency(cfg, device)
+    online = build_consistency(cfg, device, schedule)
+    target = build_consistency(cfg, device, schedule)
+    sampling_ema = build_consistency(cfg, device, schedule)
 
     pretrained = ct_cfg.get("pretrained_ckpt")
     if pretrained:
@@ -139,6 +157,7 @@ def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
         sampling_ema_model=sampling_ema,
         data_dir=cfg["data"]["data_dir"],
         resume_ckpt=resume,
+        init_ckpt=init_ckpt,
         batch_size=cfg["training"]["batch_size"],
         image_size=cfg["data"]["image_size"],
         lr=cfg["training"]["lr"],
@@ -158,6 +177,9 @@ def run_ct(cfg: dict, device: torch.device, resume: str | None) -> None:
         wandb_project=cfg["logging"].get("wandb_project", "consistency-models"),
         wandb_run_name=cfg["logging"].get("wandb_run_name"),
         wandb_config={"mode": "ct", **cfg},
+        schedule=schedule,
+        out_dir=cfg["logging"].get("out_dir", "checkpoints"),
+        config=cfg,
     )
     trainer.train()
 
@@ -167,16 +189,21 @@ def main():
     parser.add_argument("--config", required=True, help="Path to YAML config")
     parser.add_argument("--mode", required=True, choices=["cd", "ct"], help="Training mode")
     parser.add_argument("--resume", default=None, help="Optional checkpoint path to resume from")
+    parser.add_argument("--init_ckpt", default=None, help="Warm-start CT weights from a checkpoint (step reset to 0)")
+    parser.add_argument("--max_steps", type=int, default=None, help="Override training.max_steps")
+    parser.add_argument("--lambda_spectral", type=float, default=None, help="Override spectral.lambda")
+    parser.add_argument("--wandb_run_name", default=None, help="Override logging.wandb_run_name")
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
+    apply_cli_overrides(cfg, args)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[train] config={args.config} mode={args.mode} device={device}")
 
     if args.mode == "cd":
         run_cd(cfg, device, args.resume)
     else:
-        run_ct(cfg, device, args.resume)
+        run_ct(cfg, device, args.resume, init_ckpt=args.init_ckpt)
 
 
 if __name__ == "__main__":
