@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from cm.diffusion.solvers import heun_solver
-from cm.diffusion.karras_schedule import karras_sigmas
+from cm.diffusion.karras_schedule import ScheduleConfig, karras_sigmas
 
 
 def consistency_distillation_loss(
@@ -12,7 +12,7 @@ def consistency_distillation_loss(
     teacher_model: nn.Module,
     images: torch.Tensor,
     num_scales: int = 18,
-    sigma_data: float = 0.5,
+    schedule: ScheduleConfig | None = None,
     use_lpips: bool = False,
     lpips_loss_fn: nn.Module = None,
     lambda_spectral: float = 0.0,
@@ -27,7 +27,15 @@ def consistency_distillation_loss(
     device = images.device
     batch_size = images.shape[0]
 
-    sigmas = karras_sigmas(num_scales, device=device)
+    schedule = schedule or ScheduleConfig()
+    sigma_data = schedule.sigma_data
+    sigmas = karras_sigmas(
+        num_scales,
+        sigma_min=schedule.sigma_min,
+        sigma_max=schedule.sigma_max,
+        rho=schedule.rho,
+        device=device,
+    )
 
     indices = torch.randint(0, num_scales - 1, (batch_size,), device=device)
     t_n        = sigmas[indices]
@@ -58,18 +66,24 @@ def consistency_distillation_loss(
     weights = (snrs + (1.0 / sigma_data ** 2)).view(-1, 1, 1, 1)
 
     if use_lpips and lpips_loss_fn is not None:
+        # LPIPS in float32 outside autocast — the VGG convs are fp16-unsafe
+        # (same rationale as the float32 FFT in the spectral loss below)
+        online_pred = online_pred.float()
+        target_pred = target_pred.float()
+
         # Upscale to 224 before LPIPS — VGG backbone expects ~ImageNet scale
         if online_pred.shape[-1] < 256:
             online_pred = F.interpolate(online_pred, size=224, mode="bilinear")
             target_pred = F.interpolate(target_pred, size=224, mode="bilinear")
 
         # piq.LPIPS(reduction="none") returns (B,); weights.squeeze() → (B,)
-        loss = (
-            lpips_loss_fn(
-                (online_pred + 1) / 2.0,
-                (target_pred + 1) / 2.0,
-            ) * weights.squeeze()
-        ).mean()
+        with torch.autocast(device_type=online_pred.device.type, enabled=False):
+            loss = (
+                lpips_loss_fn(
+                    (online_pred + 1) / 2.0,
+                    (target_pred + 1) / 2.0,
+                ) * weights.squeeze()
+            ).mean()
     else:
         raw_loss = (online_pred - target_pred) ** 2
         loss = (raw_loss * weights).mean()
@@ -82,7 +96,7 @@ def consistency_training_loss(
     target_model: nn.Module,
     images: torch.Tensor,
     num_scales: int,
-    sigma_data: float = 0.5,
+    schedule: ScheduleConfig | None = None,
     use_lpips: bool = False,
     lpips_loss_fn: nn.Module = None,
     lambda_spectral: float = 0.0,
@@ -99,7 +113,15 @@ def consistency_training_loss(
     device = images.device
     batch_size = images.shape[0]
 
-    sigmas = karras_sigmas(num_scales, device=device)
+    schedule = schedule or ScheduleConfig()
+    sigma_data = schedule.sigma_data
+    sigmas = karras_sigmas(
+        num_scales,
+        sigma_min=schedule.sigma_min,
+        sigma_max=schedule.sigma_max,
+        rho=schedule.rho,
+        device=device,
+    )
 
     indices = torch.randint(0, num_scales - 1, (batch_size,), device=device)
     t_n        = sigmas[indices]
@@ -128,16 +150,21 @@ def consistency_training_loss(
     weights = (snrs + (1.0 / sigma_data ** 2)).view(-1, 1, 1, 1)
 
     if use_lpips and lpips_loss_fn is not None:
+        # LPIPS in float32 outside autocast — see the CD loss above
+        online_pred = online_pred.float()
+        target_pred = target_pred.float()
+
         if online_pred.shape[-1] < 256:
             online_pred = F.interpolate(online_pred, size=224, mode="bilinear")
             target_pred = F.interpolate(target_pred, size=224, mode="bilinear")
 
-        loss = (
-            lpips_loss_fn(
-                (online_pred + 1) / 2.0,
-                (target_pred + 1) / 2.0,
-            ) * weights.squeeze()
-        ).mean()
+        with torch.autocast(device_type=online_pred.device.type, enabled=False):
+            loss = (
+                lpips_loss_fn(
+                    (online_pred + 1) / 2.0,
+                    (target_pred + 1) / 2.0,
+                ) * weights.squeeze()
+            ).mean()
     else:
         raw_loss = (online_pred - target_pred) ** 2
         loss = (raw_loss * weights).mean()
