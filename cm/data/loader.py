@@ -1,6 +1,5 @@
 import os
 
-import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 

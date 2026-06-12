@@ -121,7 +121,7 @@ def download_imagenet_kaggle(raw_dir: str, auto_unzip: bool = True) -> str:
     if not train_dir.is_dir():
         zip_path = raw_path / "imagenet-object-localization-challenge.zip"
         if zip_path.is_file():
-            print(f"[!] Zip downloaded but not extracted. Re-run with auto_unzip=True or extract manually:")
+            print("[!] Zip downloaded but not extracted. Re-run with auto_unzip=True or extract manually:")
             print(f"    unzip -q {zip_path} -d {raw_path}")
         else:
             print(f"[!] Expected train dir not found at {train_dir}.")

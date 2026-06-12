@@ -1,5 +1,4 @@
 import os
-import torch
 from torchvision.utils import save_image
 
 # 앞서 우리가 작성한 모듈들을 불러옵니다.
