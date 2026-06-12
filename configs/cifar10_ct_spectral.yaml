@@ -1,0 +1,44 @@
+data:
+  image_size: 32
+  channels: 3
+  data_dir: ./data/cifar10/train
+
+model:
+  model_channels: 128
+  channel_mult: [1, 2, 2, 2]
+  num_res_blocks: 4
+  attention_resolutions: [16, 8]
+  num_heads: 4
+  dropout: 0.0
+  num_classes: null
+
+training:
+  loss: lpips            # LPIPS base + spectral add-on (see spectral.lambda)
+  batch_size: 256
+  lr: 0.0004
+  max_steps: 1000000     # MATCH original 150k base: anneal N(k)/mu(k) over 1M, STOP at 150k manually
+  use_fp16: false        # fp32 for clean measurement (matches 10k screening + base)
+  sampling_ema_decay: 0.9999
+
+ct:
+  s0: 2
+  s1: 150
+  mu0: 0.9
+
+logging:
+  ckpt_every: 5000
+  log_every: 50
+  out_dir: runs/cifar10_ct_spectral
+  use_wandb: true
+  wandb_project: consistency-models
+  wandb_run_name: ct_spectral_lam0.2_150k_fp32
+
+schedule:
+  sigma_min: 0.002
+  sigma_max: 80.0
+  sigma_data: 0.5
+  rho: 7.0
+
+spectral:
+  lambda: 0.2            # SNR-adaptive high-frequency consistency loss (best in 10k screen)
+  hp_cutoff: 0.5
