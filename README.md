@@ -91,6 +91,7 @@ model before training starts. The samplers load the sampling EMA by default.
 | Batch size | 256 | 256 | 64 | 64 |
 | Precision | fp32 | fp32 | fp16 | fp16 |
 | Loss | LPIPS | LPIPS | LPIPS | LPIPS |
+| Max steps | 150k | 150k | 150k | 150k |
 
 Batch sizes and step counts are reduced from the paper (which uses batch 512 to 2048 over 600k to
 800k steps). Edit the YAML to scale up with more compute.
