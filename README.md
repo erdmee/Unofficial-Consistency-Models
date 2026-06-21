@@ -48,6 +48,10 @@ match to the published FID.
 | ImageNet-64 CD, ours (batch 64, 150k) | 8.62 | 5.62 |
 | ImageNet-64 CD, paper (batch 2048, 600k) | 6.20 | 4.70 |
 | CIFAR-10 CT, ours (internal, batch 256, 150k) | 65.4 | 65.8 |
+| CIFAR-10 CT, paper (batch 512, 800k) | 8.70 | 5.83 |
+
+Paper rows are the published 50k-image FID; our CIFAR-10 row is the internal 10k-sample FID described
+above, so the two CIFAR-10 rows are not directly comparable.
 
 The spectral consistency loss, applied as a 10k-step fine-tune at weight 0.2, lowers CIFAR-10 FID
 across samplers (for example, 2-step from 66.5 to 57.0) and brings the generated power spectrum closest
