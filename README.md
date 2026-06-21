@@ -12,9 +12,9 @@ teacher and teacher-free consistency training (CT), and adds two studied extensi
 spectral consistency loss and a consistency-plus-diffusion hybrid sampler.
 
 <p align="center">
-  <img src="assets/samples_imagenet64.png" width="90%" alt="ImageNet-64 samples at 1, 2, and 4 NFE">
+  <img src="assets/samples_imagenet64.png" width="80%" alt="ImageNet-64 samples at 1 and 2 NFE">
 </p>
-<p align="center"><em>Class-conditional ImageNet-64 samples from our CD model at 1, 2, and 4 NFE.</em></p>
+<p align="center"><em>Class-conditional ImageNet-64 samples from our CD model at 1 and 2 NFE.</em></p>
 
 ## Overview
 
@@ -49,12 +49,13 @@ match to the published FID.
 | ImageNet-64 CD, paper (batch 2048, 600k) | 6.20 | 4.70 |
 | CIFAR-10 CT, ours (internal, batch 256, 150k) | 65.4 | 65.8 |
 
-The spectral consistency loss, applied as a 10k-step fine-tune at weight 0.2, lowers the CIFAR-10
-4-step FID from 63.1 to 52.3 and brings the generated power spectrum closest to the real data. Trained
-from scratch the same term hurts quality, so it is used as a fine-tune of a converged model.
+The spectral consistency loss, applied as a 10k-step fine-tune at weight 0.2, lowers CIFAR-10 FID
+across samplers (for example, 2-step from 66.5 to 57.0) and brings the generated power spectrum closest
+to the real data. Trained from scratch the same term hurts quality, so it is used as a fine-tune of a
+converged model.
 
 <p align="center">
-  <img src="assets/samples_cifar10.png" width="80%" alt="CIFAR-10 CT samples at 1, 2, and 4 NFE">
+  <img src="assets/samples_cifar10.png" width="70%" alt="CIFAR-10 CT samples at 1 and 2 NFE">
 </p>
 <p align="center">
   <img src="assets/training_dynamics.png" width="80%" alt="CT and CD training curves over 150k steps">
@@ -136,14 +137,14 @@ uv run python -m cm.sampling.onestep \
   --batch_size 64 --out_path sample.png
 ```
 
-Multi-step (the `--nfe` presets use the paper CIFAR-10 schedules, 2 to `[0.821]` and 4 to
-`[24.4, 5.84, 0.9]`; `--ts` sets explicit levels):
+Multi-step (the `--nfe 2` preset uses the paper CIFAR-10 schedule `[0.821]`; `--ts` sets explicit
+descending noise levels):
 
 ```bash
 uv run python -m cm.sampling.multistep \
   --ckpt checkpoints/cifar10_ct_step150000.pt \
   --config configs/cifar10_ct.yaml \
-  --nfe 4 --batch_size 64 --out_path sample_nfe4.png
+  --nfe 2 --batch_size 64 --out_path sample_nfe2.png
 ```
 
 For a class-conditional ImageNet-64 model, add `--class_id <id>`. Use `--seed <n>` for reproducible
