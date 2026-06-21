@@ -5,77 +5,103 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![arXiv](https://img.shields.io/badge/arXiv-2303.01469-b31b1b)](https://arxiv.org/abs/2303.01469)
 
-A from-scratch PyTorch reimplementation of *Consistency Models* (Song et al., 2023): generative
-models that produce an image in a single network evaluation, with optional few-step refinement. Both
-training routes are supported: consistency distillation (CD) from an EDM teacher, and teacher-free
-consistency training (CT). Targets are CIFAR-10 and class-conditional ImageNet 64x64.
+A from-scratch PyTorch reimplementation of *Consistency Models* (Song et al., 2023), a class of
+generative models that produce an image in a single network evaluation with optional few-step
+refinement. The repository supports both training routes, consistency distillation (CD) from an EDM
+teacher and teacher-free consistency training (CT), and adds two studied extensions: an SNR-adaptive
+spectral consistency loss and a consistency-plus-diffusion hybrid sampler.
+
+<p align="center">
+  <img src="assets/samples_imagenet64.png" width="90%" alt="ImageNet-64 samples at 1, 2, and 4 NFE">
+</p>
+<p align="center"><em>Class-conditional ImageNet-64 samples from our CD model at 1, 2, and 4 NFE.</em></p>
 
 ## Overview
 
 A diffusion model turns noise into data by integrating a probability-flow ODE, which costs many
-network evaluations. A consistency model learns a function that maps any point on a trajectory
-directly back to its clean origin, so generation collapses to a single evaluation. The boundary
-condition (the function is the identity at the smallest noise level) is built into the preconditioning
-rather than learned; the teacher uses plain EDM preconditioning. Noise levels follow the Karras
-schedule.
+network evaluations. A consistency model learns a function that maps any point on a trajectory back to
+its clean origin, so generation reduces to a single evaluation. The boundary condition (the function
+is the identity at the smallest noise level) is built into the preconditioning rather than learned;
+noise levels follow the Karras schedule. The model is an ADM-style U-Net.
 
 Two ways to train the same function:
 
 - **Consistency Distillation (CD).** Two adjacent points on a trajectory are connected by one Heun
-  step of a frozen EDM teacher. The online model sees the high-noise point and is pulled toward the
-  target model's output at the teacher-denoised point.
-- **Consistency Training (CT).** No teacher. The two points are built from the same noise sample,
-  which is an unbiased one-sample estimate of the same step. The discretization count is annealed over
-  training.
+  step of a frozen EDM teacher. The online model is pulled toward an EMA target evaluated at the
+  teacher-denoised point.
+- **Consistency Training (CT).** No teacher. The two points are built from the same noise sample, an
+  unbiased one-sample estimate of the same step. The discretization count is annealed over training.
 
-The target that supplies the regression signal is an EMA of the online weights. A separate sampling
-EMA is kept for generation, and the samplers load it by default. One-step sampling evaluates the model
-once; the multi-step sampler alternately denoises and re-noises over a short list of intermediate
-noise levels.
+A separate sampling EMA is kept for generation and is what the samplers load by default. One-step
+sampling evaluates the model once; multi-step sampling alternates denoising and re-noising over a
+short list of intermediate noise levels.
 
-## Setup
+## Results
 
-Python 3.11 and `uv`:
+All numbers were obtained under a reduced compute budget (150k steps at batch 64 to 256, against the
+paper's batch 512 to 2048 over 600k to 800k steps). CIFAR-10 figures are an internal FID measured
+against `train[:10k]` with 10k samples, so they are useful as relative comparisons rather than as a
+match to the published FID.
+
+| Setting | 1-step FID | 2-step FID |
+|---|---|---|
+| ImageNet-64 CD, ours (batch 64, 150k) | 8.62 | 5.62 |
+| ImageNet-64 CD, paper (batch 2048, 600k) | 6.20 | 4.70 |
+| CIFAR-10 CT, ours (internal, batch 256, 150k) | 65.4 | 65.8 |
+
+The spectral consistency loss, applied as a 10k-step fine-tune at weight 0.2, lowers the CIFAR-10
+4-step FID from 63.1 to 52.3 and brings the generated power spectrum closest to the real data. Trained
+from scratch the same term hurts quality, so it is used as a fine-tune of a converged model.
+
+<p align="center">
+  <img src="assets/samples_cifar10.png" width="80%" alt="CIFAR-10 CT samples at 1, 2, and 4 NFE">
+</p>
+<p align="center">
+  <img src="assets/training_dynamics.png" width="80%" alt="CT and CD training curves over 150k steps">
+</p>
+
+## Installation
+
+Requires Python 3.11 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
-source .venv/bin/activate
 ```
 
-`pyproject.toml` pins `torch==2.5.1` and `torchvision==0.20.1`. On Linux the wheels come from the
-CUDA 12.1 index; macOS gets the default CPU/MPS build, which is fine for tests but not for training.
+`uv sync` creates `.venv` and installs the pinned dependencies from `uv.lock`. Run any command with
+`uv run` (no manual activation needed), for example `uv run python -m pytest`. On Linux the torch
+wheels come from the CUDA 12.1 index; macOS uses the default CPU/MPS build, which is fine for the test
+suite but not for training.
 
 ## Data
 
 CIFAR-10:
 
 ```bash
-python -m cm.data.download --dataset cifar10 --data_dir ./data
+uv run python -m cm.data.download --dataset cifar10 --data_dir ./data
 ```
 
 This unpacks CIFAR-10 into `./data/cifar10/{train,val}/<class>/<idx>.png`.
 
 ImageNet 64x64 follows the EDM convention: download ILSVRC2012, center-crop to square, and resize to
-64x64. The loader accepts either `<root>/<class>/<img>.png` or flat files prefixed with the WNID; the
-class label is taken from the parent directory or the filename prefix.
-
-For CD, place an EDM teacher checkpoint at the path given by `cd.teacher_ckpt` in the config (for
-example `pretrained/edm_imagenet64_ema.pt`). The file is a state dict matching
-`cm.models.unet.UNetModel`.
+64x64. The loader accepts either `<root>/<class>/<img>.png` or flat files prefixed with the WNID. For
+CD, place an EDM teacher checkpoint at the path given by `cd.teacher_ckpt` in the config (for example
+`pretrained/edm_imagenet64_ema.pt`); it should be a state dict matching `cm.models.unet.UNetModel`.
 
 ## Training
 
 ```bash
-python -m cm.training.train --config configs/cifar10_ct.yaml    --mode ct
-python -m cm.training.train --config configs/cifar10_cd.yaml    --mode cd
-python -m cm.training.train --config configs/imagenet64_ct.yaml --mode ct
-python -m cm.training.train --config configs/imagenet64_cd.yaml --mode cd
+uv run python -m cm.training.train --config configs/cifar10_ct.yaml    --mode ct
+uv run python -m cm.training.train --config configs/cifar10_cd.yaml    --mode cd
+uv run python -m cm.training.train --config configs/imagenet64_ct.yaml --mode ct
+uv run python -m cm.training.train --config configs/imagenet64_cd.yaml --mode cd
 ```
 
-`--resume path/to/step_XXXXXX.pt` continues from a checkpoint. CT can optionally initialize from
-`ct.pretrained_ckpt`. In all cases the target and sampling-EMA models are synchronized to the online
-model before training starts. The samplers load the sampling EMA by default.
+Useful flags: `--resume <ckpt>` continues from a checkpoint, `--init_ckpt <ckpt>` warm-starts CT
+weights, `--max_steps <n>` overrides the schedule length, and `--lambda_spectral <w>` enables the
+spectral loss (or use `configs/cifar10_ct_spectral.yaml`). The target and sampling-EMA models are
+synchronized to the online model before training starts.
 
 ### Defaults
 
@@ -93,35 +119,42 @@ model before training starts. The samplers load the sampling EMA by default.
 | Loss | LPIPS | LPIPS | LPIPS | LPIPS |
 | Max steps | 150k | 150k | 150k | 150k |
 
-Batch sizes and step counts are reduced from the paper (which uses batch 512 to 2048 over 600k to
-800k steps). Edit the YAML to scale up with more compute.
-
-### Logging
-
-`wandb` is wired into the trainer. Run `wandb login` once; loss, learning rate, and (for CT) the
-schedules are streamed to the project in `logging.wandb_project`. Set `logging.use_wandb: false` to
-disable.
+Batch sizes and step counts are reduced from the paper. Edit the YAML to scale up with more compute.
+`wandb` logging is wired into the trainer; set `logging.use_wandb: false` to disable.
 
 ## Sampling
 
+The architecture is read from the checkpoint when available, otherwise pass the training `--config`.
+Samplers load the sampling EMA by default.
+
+One-step:
+
 ```bash
-python -m cm.sampling.onestep \
-  --ckpt checkpoints/step_050000.pt \
-  --batch_size 64 --image_size 32 \
-  --out_path samples.png
+uv run python -m cm.sampling.onestep \
+  --ckpt checkpoints/cifar10_ct_step150000.pt \
+  --config configs/cifar10_ct.yaml \
+  --batch_size 64 --out_path sample.png
 ```
 
-For a class-conditional ImageNet64 model, pass `--num_classes 1000 --class_id <id>`. Without
-`--class_id`, samples come from class 0. The multi-step sampler in `cm.sampling.multistep` takes a
-descending list of intermediate noise levels; paper schedules for CIFAR-10 are `[0.821]` for NFE 2 and
-`[24.4, 5.84, 0.9]` for NFE 4.
+Multi-step (the `--nfe` presets use the paper CIFAR-10 schedules, 2 to `[0.821]` and 4 to
+`[24.4, 5.84, 0.9]`; `--ts` sets explicit levels):
 
-## Project layout
+```bash
+uv run python -m cm.sampling.multistep \
+  --ckpt checkpoints/cifar10_ct_step150000.pt \
+  --config configs/cifar10_ct.yaml \
+  --nfe 4 --batch_size 64 --out_path sample_nfe4.png
+```
+
+For a class-conditional ImageNet-64 model, add `--class_id <id>`. Use `--seed <n>` for reproducible
+noise.
+
+## Repository layout
 
 ```
 cm/
-  models/      UNet + EDM/Consistency preconditioning
-  diffusion/   Karras sigmas, EMA/discretization schedules, Heun solver
+  models/      UNet and EDM/Consistency preconditioning
+  diffusion/   Karras sigmas, EMA and discretization schedules, Heun solver
   training/    CD/CT trainers, loss functions, entrypoint
   sampling/    one-step and multi-step samplers
   evaluation/  FID via the reference Inception weights
@@ -151,3 +184,9 @@ tests/         shape and numerical sanity tests
   year      = {2023}
 }
 ```
+
+## Acknowledgements
+
+This is an unofficial reimplementation for study purposes. The architecture and preconditioning follow
+EDM, and the FID path uses the reference Inception weights. It is not affiliated with the original
+authors.
