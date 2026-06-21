@@ -5,57 +5,33 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![arXiv](https://img.shields.io/badge/arXiv-2303.01469-b31b1b)](https://arxiv.org/abs/2303.01469)
 
-A clean, from-scratch PyTorch reimplementation of *Consistency Models*
-(Song et al., 2023) — generative models that produce an image in a **single
-network evaluation**, with optional few-step refinement. Both training routes
-are supported: **consistency distillation (CD)** from an EDM teacher, and
-teacher-free **consistency training (CT)**. Targets are CIFAR-10 and
-class-conditional ImageNet 64×64.
+A from-scratch PyTorch reimplementation of *Consistency Models* (Song et al., 2023): generative
+models that produce an image in a single network evaluation, with optional few-step refinement. Both
+training routes are supported: consistency distillation (CD) from an EDM teacher, and teacher-free
+consistency training (CT). Targets are CIFAR-10 and class-conditional ImageNet 64x64.
 
-## Method overview
+## Overview
 
-Diffusion models map noise to data by integrating a probability-flow ODE,
-which costs tens to hundreds of network evaluations. A consistency model
-short-circuits that ODE by learning a **consistency function**
-`f(x_t, t) ≈ x_ε` that sends *any* point on a trajectory directly back to its
-origin. Because every point on the same trajectory maps to the same `x_ε`,
-generation collapses to one evaluation: draw `x_T ~ N(0, T²I)` and return
-`f(x_T, T)` (`cm/sampling/onestep.py`).
+A diffusion model turns noise into data by integrating a probability-flow ODE, which costs many
+network evaluations. A consistency model learns a function that maps any point on a trajectory
+directly back to its clean origin, so generation collapses to a single evaluation. The boundary
+condition (the function is the identity at the smallest noise level) is built into the preconditioning
+rather than learned; the teacher uses plain EDM preconditioning. Noise levels follow the Karras
+schedule.
 
-**Boundary condition.** The function is parameterized so that `f(x, ε) = x`
-holds exactly at the smallest noise level `ε = 0.002`. This is baked into the
-preconditioning rather than learned: `ConsistencyPrecond` uses skip/output
-coefficients with `c_skip → 1`, `c_out → 0` as `t → ε`
-(`cm/models/precond.py`). The teacher network instead uses plain EDM
-preconditioning (`EDMPrecond`). Noise levels follow the Karras schedule
-(`σ_min = 0.002`, `σ_max = 80`, `ρ = 7`; `cm/diffusion/karras_schedule.py`).
+Two ways to train the same function:
 
-**Two ways to train the same function:**
+- **Consistency Distillation (CD).** Two adjacent points on a trajectory are connected by one Heun
+  step of a frozen EDM teacher. The online model sees the high-noise point and is pulled toward the
+  target model's output at the teacher-denoised point.
+- **Consistency Training (CT).** No teacher. The two points are built from the same noise sample,
+  which is an unbiased one-sample estimate of the same step. The discretization count is annealed over
+  training.
 
-- **Consistency Distillation (CD).** Adjacent trajectory points `t_n < t_{n+1}`
-  are connected by a single Heun step of a frozen EDM teacher. The online model
-  sees the high-noise point `x_{t_{n+1}}` and is pulled toward the target
-  model's output at the teacher-denoised point `x_{t_n}`
-  (`consistency_distillation_loss`).
-- **Consistency Training (CT).** No teacher. The pair
-  `(x_{t_n}, x_{t_{n+1}})` is built from the **same** noise sample `z`, an
-  unbiased one-sample estimate of the ODE step that removes the teacher
-  entirely (`consistency_training_loss`, paper Algorithm 3). The
-  discretization count `N(k)` is annealed `s₀ → s₁` over training (paper Eq. 11).
-
-Both losses minimize a distance between the online and target predictions,
-weighted by `SNR + 1/σ_data²` (optionally LPIPS instead of squared error).
-
-**EMA targets.** The *target* model that supplies the regression target is an
-EMA of the online weights, with decay `μ(k) = exp(s₀·log μ₀ / N(k))` in CT so
-the averaging window stays roughly constant as `N(k)` grows. A **separate
-sampling EMA** (decay ≈ 0.9999) is maintained purely for generation and is what
-the samplers load by default (paper §4).
-
-**Generation.** One-step sampling evaluates `f(x_T, T)` once. The multi-step
-sampler (`cm/sampling/multistep.py`) trades a few evaluations for quality by
-alternately denoising to `x_ε` and re-noising to a descending list of
-intermediate levels τ.
+The target that supplies the regression signal is an EMA of the online weights. A separate sampling
+EMA is kept for generation, and the samplers load it by default. One-step sampling evaluates the model
+once; the multi-step sampler alternately denoises and re-noises over a short list of intermediate
+noise levels.
 
 ## Setup
 
@@ -67,10 +43,8 @@ uv sync
 source .venv/bin/activate
 ```
 
-`pyproject.toml` pins `torch==2.5.1` and `torchvision==0.20.1`. On Linux the
-wheels are pulled from `https://download.pytorch.org/whl/cu121`, which works
-with any NVIDIA driver that supports CUDA ≥ 12.1. macOS gets the default PyPI
-build (CPU/MPS) — useful for running tests, not for training.
+`pyproject.toml` pins `torch==2.5.1` and `torchvision==0.20.1`. On Linux the wheels come from the
+CUDA 12.1 index; macOS gets the default CPU/MPS build, which is fine for tests but not for training.
 
 ## Data
 
@@ -80,41 +54,32 @@ CIFAR-10:
 python -m cm.data.download --dataset cifar10 --data_dir ./data
 ```
 
-This unpacks the PyTorch CIFAR-10 download into
-`./data/cifar10/{train,val}/<class>/<idx>.png`.
+This unpacks CIFAR-10 into `./data/cifar10/{train,val}/<class>/<idx>.png`.
 
-ImageNet 64×64 follows the EDM convention. Download ILSVRC2012 from
-[Kaggle](https://www.kaggle.com/competitions/imagenet-object-localization-challenge/data),
-then center-crop to square and Lanczos-resize to 64×64. The loader accepts
-either `<root>/<class>/<img>.png` or flat files prefixed with the WNID
-(`n01440764_2708.JPEG`); the class label is inferred from the parent directory
-or filename prefix.
+ImageNet 64x64 follows the EDM convention: download ILSVRC2012, center-crop to square, and resize to
+64x64. The loader accepts either `<root>/<class>/<img>.png` or flat files prefixed with the WNID; the
+class label is taken from the parent directory or the filename prefix.
 
-For CD, place an EDM teacher checkpoint at the path given by `cd.teacher_ckpt`
-in the config (e.g. `pretrained/edm_imagenet64_ema.pt`). The file should be a
-state dict matching `cm.models.unet.UNetModel`.
+For CD, place an EDM teacher checkpoint at the path given by `cd.teacher_ckpt` in the config (for
+example `pretrained/edm_imagenet64_ema.pt`). The file is a state dict matching
+`cm.models.unet.UNetModel`.
 
 ## Training
 
 ```bash
-python -m cm.training.train --config configs/cifar10_ct.yaml      --mode ct
-python -m cm.training.train --config configs/cifar10_cd.yaml      --mode cd
-python -m cm.training.train --config configs/imagenet64_ct.yaml   --mode ct
-python -m cm.training.train --config configs/imagenet64_cd.yaml   --mode cd
+python -m cm.training.train --config configs/cifar10_ct.yaml    --mode ct
+python -m cm.training.train --config configs/cifar10_cd.yaml    --mode cd
+python -m cm.training.train --config configs/imagenet64_ct.yaml --mode ct
+python -m cm.training.train --config configs/imagenet64_cd.yaml --mode cd
 ```
 
-`--resume path/to/step_XXXXXX.pt` continues from a saved checkpoint.
-
-CT optionally initializes from `ct.pretrained_ckpt` (e.g. an EDM-pretrained
-UNet). Whether or not a pretrained file is loaded, the target and sampling-EMA
-models are synchronized to the online model before training starts.
-
-A separate **sampling EMA** is maintained alongside the **target EMA** (paper
-§4). `cm.sampling.onestep` loads the sampling EMA by default.
+`--resume path/to/step_XXXXXX.pt` continues from a checkpoint. CT can optionally initialize from
+`ct.pretrained_ckpt`. In all cases the target and sampling-EMA models are synchronized to the online
+model before training starts. The samplers load the sampling EMA by default.
 
 ### Defaults
 
-| | CIFAR-10 CD | CIFAR-10 CT | ImageNet64 CD | ImageNet64 CT |
+| | CIFAR-10 CT | CIFAR-10 CD | ImageNet64 CT | ImageNet64 CD |
 |---|---|---|---|---|
 | Model channels | 128 | 128 | 192 | 192 |
 | Channel mult | 1,2,2,2 | 1,2,2,2 | 1,2,3,4 | 1,2,3,4 |
@@ -122,22 +87,19 @@ A separate **sampling EMA** is maintained alongside the **target EMA** (paper
 | Attention resolutions | 16, 8 | 16, 8 | 32, 16, 8 | 32, 16, 8 |
 | Class-conditional | no | no | yes (1000) | yes (1000) |
 | Optimizer | RAdam, wd=0 | RAdam, wd=0 | RAdam, wd=0 | RAdam, wd=0 |
-| Learning rate | 4e-4 | 4e-4 | 8e-6 | 1e-4 |
+| Learning rate | 4e-4 | 4e-4 | 1e-4 | 8e-6 |
 | Batch size | 256 | 256 | 64 | 64 |
-| Mixed precision | fp32 | fp32 | fp16 | fp16 |
-| Target EMA μ | 0.0 | schedule | 0.95 | schedule |
-| Sampling EMA | 0.9999 | 0.9999 | 0.999943 | 0.999943 |
-| N (CD) / s₀→s₁ (CT) | 18 | 2 → 150 | 40 | 2 → 200 |
-| Max steps | 100k | 100k | 100k | 100k |
+| Precision | fp32 | fp32 | fp16 | fp16 |
+| Loss | LPIPS | LPIPS | LPIPS | LPIPS |
 
-Batch sizes and step counts are reduced from the paper (paper uses 512/2048
-and 600–800k steps). Edit the YAML to scale up if you have the compute budget.
+Batch sizes and step counts are reduced from the paper (which uses batch 512 to 2048 over 600k to
+800k steps). Edit the YAML to scale up with more compute.
 
 ### Logging
 
-`wandb` is wired into the trainer. Run `wandb login` once, then loss, lr, and
-(for CT) `N(k)` and `μ(k)` are streamed to the project named in
-`logging.wandb_project`. Set `logging.use_wandb: false` to disable.
+`wandb` is wired into the trainer. Run `wandb login` once; loss, learning rate, and (for CT) the
+schedules are streamed to the project in `logging.wandb_project`. Set `logging.use_wandb: false` to
+disable.
 
 ## Sampling
 
@@ -148,26 +110,22 @@ python -m cm.sampling.onestep \
   --out_path samples.png
 ```
 
-For a class-conditional ImageNet64 model, pass `--num_classes 1000 --class_id <id>`.
-Without `--class_id`, every sample comes from class 0.
-
-The multi-step sampler in `cm.sampling.multistep` takes a descending list of
-intermediate noise levels τ. Paper-recommended schedules for CIFAR-10:
-
-- NFE = 2 → `[0.821]`
-- NFE = 4 → `[24.4, 5.84, 0.9]`
+For a class-conditional ImageNet64 model, pass `--num_classes 1000 --class_id <id>`. Without
+`--class_id`, samples come from class 0. The multi-step sampler in `cm.sampling.multistep` takes a
+descending list of intermediate noise levels; paper schedules for CIFAR-10 are `[0.821]` for NFE 2 and
+`[24.4, 5.84, 0.9]` for NFE 4.
 
 ## Project layout
 
 ```
 cm/
   models/      UNet + EDM/Consistency preconditioning
-  diffusion/   Karras sigmas, EMA schedules, Heun solver
+  diffusion/   Karras sigmas, EMA/discretization schedules, Heun solver
   training/    CD/CT trainers, loss functions, entrypoint
   sampling/    one-step and multi-step samplers
-  evaluation/  FID via TF-Inception reference weights
+  evaluation/  FID via the reference Inception weights
   data/        dataset, loader, transforms, CIFAR-10 downloader
-configs/       per-dataset × per-mode YAML
+configs/       per-dataset, per-mode YAML
 tests/         shape and numerical sanity tests
 ```
 
@@ -176,17 +134,13 @@ tests/         shape and numerical sanity tests
 - Song, Y., Dhariwal, P., Chen, M., Sutskever, I. *Consistency Models*. ICML 2023.
   [arXiv:2303.01469](https://arxiv.org/abs/2303.01469).
   [Official code](https://github.com/openai/consistency_models).
-- Karras, T., Aittala, M., Aila, T., Laine, S. *Elucidating the Design Space of
-  Diffusion-Based Generative Models*. NeurIPS 2022.
-  [arXiv:2206.00364](https://arxiv.org/abs/2206.00364).
+- Karras, T., Aittala, M., Aila, T., Laine, S. *Elucidating the Design Space of Diffusion-Based
+  Generative Models*. NeurIPS 2022. [arXiv:2206.00364](https://arxiv.org/abs/2206.00364).
   [Official code](https://github.com/NVlabs/edm).
-- Dhariwal, P., Nichol, A. *Diffusion Models Beat GANs on Image Synthesis*.
-  NeurIPS 2021.
+- Dhariwal, P., Nichol, A. *Diffusion Models Beat GANs on Image Synthesis*. NeurIPS 2021.
   [arXiv:2105.05233](https://arxiv.org/abs/2105.05233).
 
 ## Citation
-
-If this reimplementation is useful, please cite the original paper:
 
 ```bibtex
 @inproceedings{song2023consistency,
